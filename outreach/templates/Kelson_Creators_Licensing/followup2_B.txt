@@ -1,0 +1,8 @@
+Subject: Still worth a look?
+
+Hello {{FirstName}},
+
+Following up once more on {{CompanyName}}. If this isn't a priority right now, totally understand - just wanted to leave the door open.
+
+Thanks,
+[Your Name]

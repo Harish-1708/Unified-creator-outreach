@@ -1,0 +1,8 @@
+Subject: A more specific note
+
+Hi {{FirstName}},
+
+Wanted to be more specific this time instead of just checking in: [concrete detail relevant to their situation]. Curious if that resonates.
+
+Best,
+[Your Name]

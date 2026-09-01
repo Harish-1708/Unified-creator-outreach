@@ -1,0 +1,8 @@
+Subject: A specific thought
+
+Hello {{FirstName}},
+
+Wanted to add something more specific this time rather than just a nudge: [specific idea relevant to their company]. Let me know if it's worth exploring.
+
+Thanks,
+[Your Name]

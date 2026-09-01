@@ -1,0 +1,8 @@
+Subject: Something concrete for {{CompanyName}}
+
+Hi {{FirstName}},
+
+Instead of another generic follow-up, here's a concrete thought on how this could help: [specific point]. Open to your thoughts.
+
+Regards,
+[Your Name]

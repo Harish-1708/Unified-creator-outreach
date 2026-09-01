@@ -1,0 +1,8 @@
+Subject: Signing off for now
+
+Hi {{FirstName}},
+
+I'll stop following up after this one so I'm not a nuisance. Wishing {{CompanyName}} all the best - happy to reconnect anytime down the line.
+
+Best,
+[Your Name]

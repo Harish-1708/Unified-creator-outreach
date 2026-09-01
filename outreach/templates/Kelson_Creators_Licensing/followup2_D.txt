@@ -1,0 +1,8 @@
+Subject: Third time's the charm?
+
+Hi {{FirstName}},
+
+I'll admit this is my third note - promise I'll stop after this if it's not a fit. Just wanted to check once more before moving on.
+
+Best,
+[Your Name]
