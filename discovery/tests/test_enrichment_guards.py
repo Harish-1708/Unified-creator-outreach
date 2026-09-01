@@ -41,3 +41,13 @@ def test_tavily_follower_snippet_still_works_for_a_real_handle(monkeypatch):
 
     discover.tavily_follower_snippet("realcreator", "instagram")
     assert calls == ["https://www.instagram.com/realcreator/"]
+
+
+def test_music_and_ph_are_reserved_handles():
+    """Real gap found in production: these reached Claude and got scored
+    (0.3) before being excluded, wasting an API call on an obvious junk
+    handle the deterministic filter should have caught for free."""
+    for junk in ("music", "ph", "foryou", "fyp"):
+        keep, score, reason = discover.deterministic_candidate_check({"handle": junk})
+        assert keep is False, f"{junk!r} should be rejected deterministically"
+        assert "reserved platform handle" in reason
