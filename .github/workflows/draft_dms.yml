@@ -1,0 +1,51 @@
+name: Draft DMs
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign — must match the Campaign value used at discovery time (case-sensitive)"
+        required: true
+      brand_name:
+        description: "Brand name"
+        required: true
+      brand_website:
+        description: "Brand website (optional, sharpens DM personalization)"
+        required: false
+      brand_brief:
+        description: "Same BRAND_BRIEF used in discovery (optional) — keeps the DM persona aligned with whatever targeting language found this creator"
+        required: false
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account file
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: echo "$GCP_SA_KEY" > service_account.json
+
+      - name: Draft DMs for shortlisted rows
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          BRAND_NAME: ${{ github.event.inputs.brand_name }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+          BRAND_WEBSITE: ${{ github.event.inputs.brand_website }}
+          BRAND_BRIEF: ${{ github.event.inputs.brand_brief }}
+        run: python dm_drafting.py
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f service_account.json

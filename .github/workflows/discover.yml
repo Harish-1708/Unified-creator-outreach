@@ -1,0 +1,226 @@
+name: Creator Discovery Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign — typed identifier used across every stage (shortlist sync, DM drafting, the email bridge, Asana). Usually the same as brand_name, but kept separate so a differently-named campaign (e.g. a relaunch) can target the same brand without colliding."
+        required: true
+      niche:
+        description: "Niche/industry (e.g. loungewear)"
+        required: true
+      brand_name:
+        description: "Brand name"
+        required: true
+      brand_website:
+        description: "Brand website (optional)"
+        required: false
+      brand_brief:
+        description: "Product/brand brief — what it is, who buys it, when it's used (optional but high-value, merges with website)"
+        required: false
+      target_buyer:
+        description: "Who actually buys it, if different from the creator's audience (optional, e.g. 'men, also women buying as gifts')"
+        required: false
+      use_cases:
+        description: "Moments/settings the product fits into (optional, e.g. 'gym, shower, beach, travel')"
+        required: false
+      creator_types:
+        description: "Creator types to prioritize (optional, e.g. 'fitness dads, men's lifestyle, travel')"
+        required: false
+      exclude:
+        description: "What to exclude even if niche matches (optional, e.g. 'children's apparel, lingerie, retailers')"
+        required: false
+      location:
+        description: "City/country"
+        required: true
+      platform:
+        description: "instagram | tiktok | both"
+        required: true
+        default: "both"
+      target_gender:
+        description: "male | female | both"
+        required: true
+        default: "both"
+      result_limit:
+        description: "How many QUALIFIED creators to return across all platforms, 1-60 (start with 5)"
+        required: true
+        default: "5"
+      search_budget:
+        description: "RUN-WIDE raw-candidate cap across all selected platforms (optional; auto-scaled from result_limit, capped at 400)"
+        required: false
+      llm_candidate_limit:
+        description: "Maximum pre-filtered candidates Claude may classify for the whole run (optional; auto=4x result limit, minimum 12, maximum 60)"
+        required: false
+      min_followers:
+        description: "e.g. 50k, 1 lakh (optional)"
+        required: false
+      max_followers:
+        description: "e.g. 5 lakh (optional)"
+        required: false
+      unknown_followers_policy:
+        description: "needs_verification (default, holds unverifiable-follower rows out of Master when min_followers is set) | include (old permissive behavior)"
+        required: false
+        default: "needs_verification"
+      min_overall_fit:
+        description: "Drop rows below this Overall Fit score, 0-10. Default 5 keeps clearly unqualified accounts out of Master."
+        required: false
+        default: "5"
+      require_activity_verified:
+        description: "true to require a verified recent-post date. Leave false with Serper-only enrichment, because it does not provide this data."
+        required: false
+        default: "false"
+      sonnet_refinement:
+        description: "true to run the top ~3x result_limit near-finalists through a second, more critical Sonnet pass before final ranking (catches 'plausible fit' vs 'proven fit' gaps Haiku's first pass can miss). Off by default — meaningfully increases per-run cost, bounded to a fixed small number of extra calls regardless of search_budget."
+        required: false
+        default: "false"
+      competitor_brands:
+        description: "Comma-separated competitor brands (optional)"
+        required: false
+      weight_overrides:
+        description: "Optional fit-weight overrides as key=value pairs, comma-separated, values 0-1 (e.g. 'product_fit=0.4,audience=0.2,partnership=0.15'). Keys: product_fit, audience, content_opportunity, creator_quality, partnership, location, niche, content_angle. Defaults (product_fit 0.30, audience 0.25, content_opportunity 0.20, creator_quality 0.10, partnership 0.10, location 0.05; niche and content_angle are 0/off) apply to any key you don't set — see README for why."
+        required: false
+      search_vocabulary:
+        description: "Optional: YOUR OWN search terms/hashtags/archetypes, one line, categories separated by ';'. Format: 'category: comma, separated, values; category: more, values'. Categories: terms, hashtags, archetypes. Omit a category to still get it from Claude; provide all three to skip the Claude expansion call entirely. Example: 'archetypes: fitness dad, top dad influencers USA; hashtags: #dadlife, #mensfashion'"
+        required: false
+      creator_size_tier:
+        description: "Optional: emerging (1k-10k) | mid (10k-50k) | large (50k-250k) | mega (250k+). Overrides min/max_followers with the tier's range and adds a 'top/best creators' search bias for large/mega. Does NOT fix follower-verification reliability — see README."
+        required: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account file
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: echo "$GCP_SA_KEY" > service_account.json
+
+      - name: Run pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          LICENSED_IG_API_KEY: ${{ secrets.LICENSED_IG_API_KEY }}
+          LICENSED_TIKTOK_API_KEY: ${{ secrets.LICENSED_TIKTOK_API_KEY }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          # Gemini — add GEMINI_API_KEY under Settings → Secrets and variables →
+          # Actions → Secrets. Both GEMINI_WEB_DISCOVERY and
+          # GEMINI_VERIFICATION_FALLBACK auto-enable when GEMINI_API_KEY is
+          # present — you do NOT need to set the Variables to "true" manually.
+          # Set either Variable to "false" explicitly only if you want to
+          # disable that feature even though the key is present.
+          # GEMINI_WEB_DISCOVERY_MAX_CANDIDATES defaults to 40 (set in code) —
+          # only set this Variable if you want a different target count.
+          #
+          # GEMINI_MODEL — which Gemini model to use for discovery + verification.
+          # Set this as a repo Variable (Settings → Secrets and variables → Actions
+          # → Variables tab), NOT a Secret — it is not sensitive.
+          # Default when unset: gemini-3.6-flash (hardcoded in discover.py).
+          # When Google retires a model, the 404 error log names the replacement —
+          # just update this Variable to that name and rerun. No code changes needed.
+          #
+          # GEMINI_VERIFY_MAX_PER_RUN — max gemini_verify_handle calls per run.
+          # Default 5. Each call uses one RPD slot from the free-tier daily quota.
+          # With 15+ Serper candidates, an uncapped loop can exhaust the daily
+          # budget before the run reaches Claude scoring. Set to 0 to disable.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_WEB_DISCOVERY: ${{ vars.GEMINI_WEB_DISCOVERY }}
+          GEMINI_WEB_DISCOVERY_MAX_CANDIDATES: ${{ vars.GEMINI_WEB_DISCOVERY_MAX_CANDIDATES }}
+          GEMINI_VERIFICATION_FALLBACK: ${{ vars.GEMINI_VERIFICATION_FALLBACK }}
+          GEMINI_VERIFY_MAX_PER_RUN: ${{ vars.GEMINI_VERIFY_MAX_PER_RUN }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+          NICHE: ${{ github.event.inputs.niche }}
+          BRAND_NAME: ${{ github.event.inputs.brand_name }}
+          BRAND_WEBSITE: ${{ github.event.inputs.brand_website }}
+          BRAND_BRIEF: ${{ github.event.inputs.brand_brief }}
+          TARGET_BUYER: ${{ github.event.inputs.target_buyer }}
+          USE_CASES: ${{ github.event.inputs.use_cases }}
+          CREATOR_TYPES: ${{ github.event.inputs.creator_types }}
+          EXCLUDE: ${{ github.event.inputs.exclude }}
+          LOCATION: ${{ github.event.inputs.location }}
+          PLATFORM: ${{ github.event.inputs.platform }}
+          TARGET_GENDER: ${{ github.event.inputs.target_gender }}
+          RESULT_LIMIT: ${{ github.event.inputs.result_limit }}
+          SEARCH_BUDGET: ${{ github.event.inputs.search_budget }}
+          LLM_CANDIDATE_LIMIT: ${{ github.event.inputs.llm_candidate_limit }}
+          MIN_FOLLOWERS: ${{ github.event.inputs.min_followers }}
+          MAX_FOLLOWERS: ${{ github.event.inputs.max_followers }}
+          UNKNOWN_FOLLOWERS_POLICY: ${{ github.event.inputs.unknown_followers_policy }}
+          # ALLOW_BUSINESS_ACCOUNTS — moved from a per-run workflow_dispatch
+          # input to a repo Variable to make room for the new required
+          # `campaign` input: GitHub caps workflow_dispatch at 25 inputs,
+          # and this file was already at that cap. This is a rare override
+          # (default false, disables account-type rejection), same category
+          # as CLAUDE_WEB_DISCOVERY below — a tuning knob, not a per-campaign
+          # setting. Set as a repo Variable (Settings -> Secrets and
+          # variables -> Actions -> Variables), value "true", only if you
+          # actually want business/retailer accounts scored like creators.
+          ALLOW_BUSINESS_ACCOUNTS: ${{ vars.ALLOW_BUSINESS_ACCOUNTS }}
+          MIN_OVERALL_FIT: ${{ github.event.inputs.min_overall_fit }}
+          REQUIRE_ACTIVITY_VERIFIED: ${{ github.event.inputs.require_activity_verified }}
+          SONNET_REFINEMENT: ${{ github.event.inputs.sonnet_refinement }}
+          # NOT a workflow_dispatch input — discover.yml is already at GitHub's
+          # 25-input cap for workflow_dispatch, and this is a "set occasionally"
+          # toggle rather than a per-campaign one anyway. Sourced from repo/
+          # environment Variables (Settings -> Secrets and variables -> Actions
+          # -> Variables tab) instead — NOT Secrets, since neither value here
+          # is sensitive. If you haven't created these variables, both resolve
+          # to empty string, which get_config() in discover.py treats as
+          # "false" / falls back to its own default of 20 respectively, so
+          # leaving them unset is safe and just means the feature stays off.
+          CLAUDE_WEB_DISCOVERY: ${{ vars.CLAUDE_WEB_DISCOVERY }}
+          CLAUDE_WEB_DISCOVERY_MAX_CANDIDATES: ${{ vars.CLAUDE_WEB_DISCOVERY_MAX_CANDIDATES }}
+          # Same reasoning as CLAUDE_WEB_DISCOVERY above — a tuning knob, not
+          # a per-campaign setting, and there's no input-slot room left.
+          # Unset/blank = 0 = no gate (existing behavior unchanged). Set as a
+          # repo Variable (Settings -> Secrets and variables -> Actions ->
+          # Variables), e.g. value "5", to require actual evidenced content
+          # opportunity, not just a passing aggregate score.
+          MIN_CONTENT_OPPORTUNITY: ${{ vars.MIN_CONTENT_OPPORTUNITY }}
+          COMPETITOR_BRANDS: ${{ github.event.inputs.competitor_brands }}
+          FIT_WEIGHT_OVERRIDES: ${{ github.event.inputs.weight_overrides }}
+          SEARCH_VOCABULARY: ${{ github.event.inputs.search_vocabulary }}
+          CREATOR_SIZE_TIER: ${{ github.event.inputs.creator_size_tier }}
+          # DEEP_RESEARCH_REPORT — set as a repo Variable (Settings → Secrets and
+          # variables → Actions → Variables tab, NOT Secrets).
+          # Accepts any of the following — the pipeline auto-detects the type:
+          #
+          #   A) Gemini chat share link:  https://share.gemini.google/xxxxxxxx
+          #      USE THE LIVE CHAT LINK (not the Deep Research file link).
+          #      The chat link updates as you keep asking follow-up questions,
+          #      so re-running the pipeline automatically picks up your latest
+          #      research without changing this Variable.
+          #      → Tavily fetches the rendered page (handles JS/SPA).
+          #
+          #   B) Google Doc URL:  https://docs.google.com/document/d/DOC_ID/...
+          #      Paste your full Gemini chat into one permanent Google Doc per
+          #      brand. Share it as "Anyone with the link can view". Update the
+          #      Doc between runs — the Variable URL never changes.
+          #      → Fetched via /export?format=txt (no JS, clean plain text).
+          #
+          #   C) Raw pasted text: paste the report directly (up to ~48KB).
+          #      Quick one-off runs — no URL needed.
+          #
+          # An empty or missing Variable is silently skipped; pipeline runs
+          # normally with Serper-only discovery.
+          # Duplicates within the report/chat (same creator mentioned across
+          # multiple follow-up searches) are deduped automatically.
+          DEEP_RESEARCH_REPORT: ${{ vars.DEEP_RESEARCH_REPORT }}
+        run: python discover.py
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f service_account.json
