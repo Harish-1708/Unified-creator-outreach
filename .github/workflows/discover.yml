@@ -89,6 +89,13 @@ on:
 jobs:
   discover:
     runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # discover.py lives at discovery/discover.py in the unified repo, not
+    # at repo root, so pip install, the service_account.json write, and
+    # `python discover.py` itself all need to resolve relative to here.
+    defaults:
+      run:
+        working-directory: discovery
     steps:
       - uses: actions/checkout@v4
 
