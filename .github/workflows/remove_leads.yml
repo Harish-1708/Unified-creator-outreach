@@ -1,0 +1,66 @@
+name: Remove Leads
+
+# Soft-remove ONLY — sets Status=Removed, never deletes a row. See
+# outreach.remove_leads' docstring. Triggered by the Streamlit Data tab
+# after it commits the list of LeadIDs to remove.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name"
+        required: true
+      payload_path:
+        description: "Path to the committed JSON payload file, e.g. removals/Foo/2026-08-29-143012.json"
+        required: true
+
+concurrency:
+  group: remove-leads-${{ github.event.inputs.campaign }}
+  cancel-in-progress: false
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    # Explicit, least-privilege grant — needed for the "remove the
+    # processed payload" push below. Without this, the run inherits the
+    # repo's default GITHUB_TOKEN permission; if that's read-only, the
+    # push fails with a 403 even though the removal already succeeded.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Remove leads
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -o pipefail
+          python outreach.py remove-leads --campaign "${{ github.event.inputs.campaign }}" \
+            --file "${{ github.event.inputs.payload_path }}" | tee remove_output.txt
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat remove_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the processed payload file
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          PAYLOAD_PATH="${{ github.event.inputs.payload_path }}"
+          if [ -f "$PAYLOAD_PATH" ]; then
+            git rm -f "$PAYLOAD_PATH"
+            git commit -m "Remove processed removal payload: $PAYLOAD_PATH"
+            git push
+          else
+            echo "Payload file already gone — nothing to clean up."
+          fi

@@ -1,0 +1,81 @@
+name: Check Replies
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name (must have a matching templates/<name>/ folder)"
+        required: true
+        default: "Kelson_Creators_Licensing"
+  schedule:
+    # Every 10 minutes. Adjust to taste — tighter = faster stop-on-reply
+    # and a snappier-feeling Responses inbox, looser = fewer Actions
+    # minutes used. GitHub Actions cron has its own scheduling delay
+    # (typically a few minutes under load), so "every 10" is a real
+    # improvement over "every 30" without chasing a false sense of
+    # real-time — for true real-time, use "Check Replies Now" instead.
+    - cron: "*/10 * * * *"
+
+# Without this, the scheduled run and a manual "Check Replies Now" trigger
+# (or two manual clicks close together) can execute at the same time on two
+# separate runners. check_replies() reads "already logged" ONCE at the
+# start of a run and never rechecks mid-run — so two overlapping runs can
+# both see the same unread reply as "new" and both log it, producing exact
+# duplicate rows in the Response Sheet. cancel-in-progress: false means the
+# second run QUEUES and waits its turn instead of being killed mid-IMAP-
+# fetch — we want every run to still happen, just never two at once.
+concurrency:
+  group: check-replies
+  cancel-in-progress: false
+
+jobs:
+  check-replies:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Check replies
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EMAIL_ACCOUNTS_JSON: ${{ secrets.EMAIL_ACCOUNTS_JSON }}
+          EMAIL_ACCOUNT_SLOT_1: ${{ secrets.EMAIL_ACCOUNT_SLOT_1 }}
+          EMAIL_ACCOUNT_SLOT_2: ${{ secrets.EMAIL_ACCOUNT_SLOT_2 }}
+          EMAIL_ACCOUNT_SLOT_3: ${{ secrets.EMAIL_ACCOUNT_SLOT_3 }}
+          EMAIL_ACCOUNT_SLOT_4: ${{ secrets.EMAIL_ACCOUNT_SLOT_4 }}
+          EMAIL_ACCOUNT_SLOT_5: ${{ secrets.EMAIL_ACCOUNT_SLOT_5 }}
+          EMAIL_ACCOUNT_SLOT_6: ${{ secrets.EMAIL_ACCOUNT_SLOT_6 }}
+          EMAIL_ACCOUNT_SLOT_7: ${{ secrets.EMAIL_ACCOUNT_SLOT_7 }}
+          EMAIL_ACCOUNT_SLOT_8: ${{ secrets.EMAIL_ACCOUNT_SLOT_8 }}
+          EMAIL_ACCOUNT_SLOT_9: ${{ secrets.EMAIL_ACCOUNT_SLOT_9 }}
+          EMAIL_ACCOUNT_SLOT_10: ${{ secrets.EMAIL_ACCOUNT_SLOT_10 }}
+          # Optional — sales-intent classification (Interested / Not Interested /
+          # Lead-Needs-Follow-up / Unclear) for each Genuine Reply. Leave this
+          # secret unset entirely and everything works exactly as before, with
+          # the Intent columns simply left blank.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -o pipefail
+          python outreach.py check-replies \
+            --campaign "${{ github.event.inputs.campaign || 'Kelson_Creators_Licensing' }}" \
+            | tee replies_output.txt
+      - name: Add to job summary
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat replies_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Refresh dashboard
+        if: always()
+        continue-on-error: true  # a dashboard refresh failure should never mask the reply-check result above
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python outreach.py dashboard --campaign "${{ github.event.inputs.campaign || 'Kelson_Creators_Licensing' }}"

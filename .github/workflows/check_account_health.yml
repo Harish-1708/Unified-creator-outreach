@@ -1,0 +1,57 @@
+name: Check Account Health
+
+# Logs into every configured account via IMAP (a cheap connectivity
+# check, not a real mailbox scan) and writes CONNECTED/DISCONNECTED
+# status to the shared "Email Accounts Health" Sheet tab — never the
+# password itself, which never leaves this workflow's own process.
+#
+# This is read-only from Streamlit's perspective: it needs no new GitHub
+# token permission, since Streamlit only ever READS this Sheet tab
+# (already has that access) and never triggers this workflow to write
+# credentials anywhere.
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Every 2 hours — frequent enough that a disconnected account shows
+    # up promptly, infrequent enough not to hammer Gmail's login rate
+    # limits across every account.
+    - cron: "0 */2 * * *"
+
+jobs:
+  check-account-health:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Check account health
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EMAIL_ACCOUNTS_JSON: ${{ secrets.EMAIL_ACCOUNTS_JSON }}
+          EMAIL_ACCOUNT_SLOT_1: ${{ secrets.EMAIL_ACCOUNT_SLOT_1 }}
+          EMAIL_ACCOUNT_SLOT_2: ${{ secrets.EMAIL_ACCOUNT_SLOT_2 }}
+          EMAIL_ACCOUNT_SLOT_3: ${{ secrets.EMAIL_ACCOUNT_SLOT_3 }}
+          EMAIL_ACCOUNT_SLOT_4: ${{ secrets.EMAIL_ACCOUNT_SLOT_4 }}
+          EMAIL_ACCOUNT_SLOT_5: ${{ secrets.EMAIL_ACCOUNT_SLOT_5 }}
+          EMAIL_ACCOUNT_SLOT_6: ${{ secrets.EMAIL_ACCOUNT_SLOT_6 }}
+          EMAIL_ACCOUNT_SLOT_7: ${{ secrets.EMAIL_ACCOUNT_SLOT_7 }}
+          EMAIL_ACCOUNT_SLOT_8: ${{ secrets.EMAIL_ACCOUNT_SLOT_8 }}
+          EMAIL_ACCOUNT_SLOT_9: ${{ secrets.EMAIL_ACCOUNT_SLOT_9 }}
+          EMAIL_ACCOUNT_SLOT_10: ${{ secrets.EMAIL_ACCOUNT_SLOT_10 }}
+        run: |
+          set -o pipefail
+          python outreach.py check-account-health | tee health_output.txt
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat health_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

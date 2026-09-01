@@ -1,0 +1,50 @@
+name: Backfill Thread Subject
+
+# One-time (or occasional) migration: fills in ThreadSubject for leads that
+# were already mid-sequence before that column/feature existed, so a later
+# stage's blank-Subject ("continue the thread") templates have something to
+# continue from. Never overwrites an already-set ThreadSubject, so this is
+# safe to re-run — it only ever fills in gaps.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name (must have a matching templates/<name>/ folder)"
+        required: true
+        default: "Kelson_Creators_Licensing"
+      dry_run:
+        description: "Preview only — show what would be backfilled without writing anything"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Backfill ThreadSubject
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -o pipefail
+          CMD=(python outreach.py backfill-thread-subject --campaign "${{ github.event.inputs.campaign }}")
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            CMD+=(--dry-run)
+          fi
+          "${CMD[@]}" | tee backfill_output.txt
+      - name: Add to job summary
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat backfill_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

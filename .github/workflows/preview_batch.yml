@@ -1,0 +1,63 @@
+name: Preview Batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name (must have a matching templates/<name>/ folder)"
+        required: true
+        default: "Kelson_Creators_Licensing"
+      stage:
+        description: "Stage name (intro, followup1, followup2, followup3, followup4)"
+        required: true
+        default: "intro"
+      batch_size:
+        description: "How many leads to preview"
+        required: true
+        default: "10"
+      variant:
+        description: 'Variant to force (A/B/C/D), or "Auto" for balanced rotation'
+        required: false
+        default: "Auto"
+      ignore_wait_days:
+        description: "Send/preview this stage now even if its scheduled wait hasn't elapsed (e.g. followup1's 3-day wait). Every other eligibility rule still applies."
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Run preview
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -o pipefail
+          CMD=(python outreach.py preview
+            --campaign "${{ github.event.inputs.campaign }}"
+            --stage "${{ github.event.inputs.stage }}"
+            --batch-size "${{ github.event.inputs.batch_size }}"
+            --variant "${{ github.event.inputs.variant }}")
+
+          if [ "${{ github.event.inputs.ignore_wait_days }}" = "true" ]; then
+            CMD+=(--ignore-wait-days)
+          fi
+
+          "${CMD[@]}" | tee preview_output.txt
+      - name: Add to job summary
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat preview_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

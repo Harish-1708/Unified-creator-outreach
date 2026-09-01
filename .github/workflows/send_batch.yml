@@ -1,0 +1,145 @@
+name: Send Batch
+
+# Requires you to type SEND in the confirm field — this is a deliberate
+# safety gate so a batch can never go out by accident from this workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name (must have a matching templates/<name>/ folder)"
+        required: true
+        default: "Kelson_Creators_Licensing"
+      stage:
+        description: "Stage name (intro, followup1, followup2, followup3, followup4)"
+        required: true
+        default: "intro"
+      batch_size:
+        description: "How many leads to send to (actual count may be lower — see caps below)"
+        required: true
+        default: "10"
+      variant:
+        description: 'Variant to force (A/B/C/D), or "Auto" for balanced rotation'
+        required: false
+        default: "Auto"
+      daily_limit:
+        description: "Override campaign daily send limit for THIS RUN ONLY (leave blank to use config value)"
+        required: false
+        default: ""
+      per_account_daily_limit:
+        description: "Override per-account daily limit for THIS RUN ONLY (leave blank to use config value)"
+        required: false
+        default: ""
+      sender_rotation:
+        description: "Override automatic sender rotation for THIS RUN ONLY"
+        required: false
+        type: choice
+        options:
+          - "(use config default)"
+          - "true"
+          - "false"
+        default: "(use config default)"
+      confirm:
+        description: 'Type SEND (in caps) to confirm you have already reviewed a Preview Batch run for this exact batch'
+        required: true
+        default: ""
+      ignore_wait_days:
+        description: "Send this stage now even if its scheduled wait hasn't elapsed (e.g. followup1's 3-day wait). Every other eligibility rule still applies — the previous stage must actually have been sent, this stage can't already be sent, Approval must be Yes, no reply received."
+        required: false
+        type: boolean
+        default: false
+
+# Without this, two overlapping Send runs for the SAME campaign (e.g. one
+# triggered from Streamlit, another from the GitHub Actions UI, before the
+# first finishes) can both read the Master Sheet's eligibility state before
+# either has written anything back — meaning they could both pick the same
+# "eligible" leads and both actually send to them. Grouping by campaign
+# (not campaign+stage) also protects daily_limit, since that's counted
+# across all of a campaign's stages together. cancel-in-progress: false
+# means the second run QUEUES rather than being killed mid-send.
+concurrency:
+  group: send-batch-${{ github.event.inputs.campaign }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "SEND" ]; then
+            echo "::error::You must type SEND (exact match, all caps) in the confirm field to run this workflow."
+            exit 1
+          fi
+
+  send:
+    needs: guard
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    # Sending happens in concurrent rounds (one send per distinct sender
+    # account, fired at the same time), waiting delay_max_minutes between
+    # rounds — so total time is roughly
+    # ceil(batch_size / number_of_accounts_in_rotation) * delay_max_minutes,
+    # not batch_size * delay_max_minutes. With a single account this is
+    # still the old, slower math. Adjust the timeout if you run very large
+    # batches through very few accounts.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Send batch
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EMAIL_ACCOUNTS_JSON: ${{ secrets.EMAIL_ACCOUNTS_JSON }}
+          EMAIL_ACCOUNT_SLOT_1: ${{ secrets.EMAIL_ACCOUNT_SLOT_1 }}
+          EMAIL_ACCOUNT_SLOT_2: ${{ secrets.EMAIL_ACCOUNT_SLOT_2 }}
+          EMAIL_ACCOUNT_SLOT_3: ${{ secrets.EMAIL_ACCOUNT_SLOT_3 }}
+          EMAIL_ACCOUNT_SLOT_4: ${{ secrets.EMAIL_ACCOUNT_SLOT_4 }}
+          EMAIL_ACCOUNT_SLOT_5: ${{ secrets.EMAIL_ACCOUNT_SLOT_5 }}
+          EMAIL_ACCOUNT_SLOT_6: ${{ secrets.EMAIL_ACCOUNT_SLOT_6 }}
+          EMAIL_ACCOUNT_SLOT_7: ${{ secrets.EMAIL_ACCOUNT_SLOT_7 }}
+          EMAIL_ACCOUNT_SLOT_8: ${{ secrets.EMAIL_ACCOUNT_SLOT_8 }}
+          EMAIL_ACCOUNT_SLOT_9: ${{ secrets.EMAIL_ACCOUNT_SLOT_9 }}
+          EMAIL_ACCOUNT_SLOT_10: ${{ secrets.EMAIL_ACCOUNT_SLOT_10 }}
+        run: |
+          set -o pipefail
+          CMD=(python outreach.py send
+            --campaign "${{ github.event.inputs.campaign }}"
+            --stage "${{ github.event.inputs.stage }}"
+            --batch-size "${{ github.event.inputs.batch_size }}"
+            --variant "${{ github.event.inputs.variant }}")
+
+          if [ -n "${{ github.event.inputs.daily_limit }}" ]; then
+            CMD+=(--daily-limit "${{ github.event.inputs.daily_limit }}")
+          fi
+          if [ -n "${{ github.event.inputs.per_account_daily_limit }}" ]; then
+            CMD+=(--per-account-daily-limit "${{ github.event.inputs.per_account_daily_limit }}")
+          fi
+          if [ "${{ github.event.inputs.sender_rotation }}" = "true" ] || [ "${{ github.event.inputs.sender_rotation }}" = "false" ]; then
+            CMD+=(--sender-rotation "${{ github.event.inputs.sender_rotation }}")
+          fi
+          if [ "${{ github.event.inputs.ignore_wait_days }}" = "true" ]; then
+            CMD+=(--ignore-wait-days)
+          fi
+
+          "${CMD[@]}" | tee send_output.txt
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat send_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Refresh dashboard
+        if: always()
+        continue-on-error: true  # a dashboard refresh failure should never mask the send result above
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python outreach.py dashboard --campaign "${{ github.event.inputs.campaign }}"

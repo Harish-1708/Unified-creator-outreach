@@ -1,0 +1,67 @@
+name: Mark Responses Read
+
+# Sets IsRead=Yes for a batch of response IDs, from the Responses page's
+# "Sync read status" action — read/unread state is tracked persistently
+# in the Response Sheet, not just in the browser's own session, but
+# Streamlit itself never writes to any Sheet directly (it only ever has
+# a read-only credential), so this goes through the same commit-then-
+# trigger pattern as every other write in this app.
+#
+# Deliberately batched, not one run per response: opening a dozen
+# replies in a session and triggering a full Actions run for each would
+# be slow and wasteful. The Responses page accumulates newly-read keys
+# locally and syncs them together.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name"
+        required: true
+      payload_path:
+        description: "Path to the committed JSON payload file, e.g. mark_read/Foo/2026-08-30-143012.json"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  mark-read:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Mark responses read
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -o pipefail
+          python outreach.py mark-responses-read --campaign "${{ github.event.inputs.campaign }}" \
+            --file "${{ github.event.inputs.payload_path }}" | tee mark_read_output.txt
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat mark_read_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the processed payload file
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          PAYLOAD_PATH="${{ github.event.inputs.payload_path }}"
+          if [ -f "$PAYLOAD_PATH" ]; then
+            git rm -f "$PAYLOAD_PATH"
+            git commit -m "Remove processed mark-read payload: $PAYLOAD_PATH"
+            git push
+          else
+            echo "Payload file already gone — nothing to clean up."
+          fi

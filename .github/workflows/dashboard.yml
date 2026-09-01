@@ -1,0 +1,51 @@
+name: Update Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name to update (leave blank if using 'Update all campaigns' below)"
+        required: false
+        default: ""
+      update_all:
+        description: "Update every configured campaign's dashboard, plus the combined All Campaigns Dashboard"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    # Every 6 hours, as a backstop — dashboards also refresh automatically
+    # right after every Send Batch and Check Replies run, so this mainly
+    # covers periods with no activity plus keeps error-count summaries current.
+    - cron: "0 */6 * * *"
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working directory —
+    # outreach.py lives at outreach/outreach.py in the unified repo, not at
+    # repo root.
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Update dashboard(s)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -o pipefail
+          if [ "${{ github.event.inputs.update_all }}" = "true" ] || [ -z "${{ github.event.inputs.campaign }}" ]; then
+            python outreach.py dashboard --all | tee dashboard_output.txt
+          else
+            python outreach.py dashboard --campaign "${{ github.event.inputs.campaign }}" | tee dashboard_output.txt
+          fi
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat dashboard_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
