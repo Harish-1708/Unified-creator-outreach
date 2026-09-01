@@ -7,7 +7,7 @@
 # only if a campaign wants non-default timing/limits or to force an exact
 # stage/variant shape.
 
-shared_sheet_id: "1z92iWVhPEHDVO8WTcfDs2Cz-LTaONg-lDeTgHSfdSeI"
+shared_sheet_id: "1beCHJ9dIZV2YW9BR5SmMhnAGv_F8ko0lMjRLtzL5Bzw"
 
 # Which sending account to use when a lead's own SenderAccount cell is blank
 # and the campaign doesn't set its own default_sender_account. Must match a
