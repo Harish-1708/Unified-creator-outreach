@@ -239,3 +239,15 @@ def test_dr_audience_gender_and_concerns_reach_master_row():
     assert row_by_header["dr_audience_gender"] == "72.3% Female / 27.7% Male"
     assert row_by_header["dr_research_confidence"] == "HIGH"
     assert row_by_header["dr_concerns"] == "Premium sponsorship rates due to mega tier scale"
+
+
+def test_dr_name_reaches_master_row():
+    """dr_name is the bridge's future FirstName source — must actually
+    reach the sheet, or the bridge has nothing but a raw handle to work
+    with, reintroducing the exact display-name/username confusion already
+    fixed at the discovery layer."""
+    creator = {h: "" for h in discover.MASTER_HEADERS}
+    creator["dr_name"] = "Taylor Calmus"
+    row = discover.build_master_row(creator, primary_niche="men's loungewear")
+    row_by_header = dict(zip(discover.MASTER_HEADERS, row))
+    assert row_by_header["dr_name"] == "Taylor Calmus"
