@@ -88,6 +88,14 @@ MASTER_HEADERS = [
     "niche_match", "audience_match", "location_match",
     "content_angle_strength", "partnership_signal_score", "overall_fit", "fit_explanation",
     "content_angle", "brand_affinity_note", "partnership_signal_matched", "competitor_affinity",
+    # These three are raw facts from the Deep Research report itself (not
+    # LLM-synthesized) — already captured into the candidate dict as
+    # dr_audience_gender/dr_research_confidence/dr_concerns and already fed
+    # into the scoring prompt, but until now never actually reached the
+    # sheet: a human reviewing Master had no direct way to see them, only
+    # to trust they'd been folded into overall_fit. Blank for non-DR
+    # candidates (Serper/Gemini-only), same as every other dr_* field.
+    "dr_audience_gender", "dr_research_confidence", "dr_concerns",
     # Blank unless SONNET_REFINEMENT=true — populated only for the bounded pool
     # of near-finalists that got the optional second, stronger-model pass.
     # Deliberately one column, not a full discovery-score-vs-outreach-readiness
@@ -1324,8 +1332,19 @@ EXTRACTION RULES:
          set handle_type = "username"
       d) A display name / full name only (e.g. "Chip Leighton") → use as-is,
          set handle_type = "display_name"
-   NEVER fall back to a display name if you found a @handle or profile URL
-   anywhere in the same sentence or paragraph — look for the handle first.
+   NEVER fall back to a display name if a @handle, username, or profile URL
+   for the SAME PERSON appears nearby — and "nearby" means more than just
+   the same sentence. Structured research reports commonly list a creator
+   as separate labeled lines, e.g.:
+     Creator Name: James Pieratt
+     Instagram Username: @wildhuntconditioning
+     Instagram URL: https://www.instagram.com/wildhuntconditioning/
+   These three lines describe ONE creator even though the name and the
+   actual handle are two lines apart under different labels, not in the
+   same sentence. Before marking anyone as handle_type="display_name",
+   scan the few lines immediately before and after their name for a
+   labeled "Username:", "Handle:", or "URL:" field — only fall back to
+   display_name if no such field exists anywhere near that name.
 3. Include Instagram and TikTok handles only. Skip YouTube, Twitter/X, etc.
    If the platform isn't specified for a name, make your best guess based on
    context and note it in the rationale.
