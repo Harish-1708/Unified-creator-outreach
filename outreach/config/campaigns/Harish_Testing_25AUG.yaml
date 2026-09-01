@@ -1,0 +1,7 @@
+sending:
+  daily_limit: 100
+  per_account_daily_limit: 10
+  sender_rotation: true
+  rotation_accounts:
+  - sales1
+status: draft
