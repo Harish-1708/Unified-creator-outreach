@@ -126,3 +126,54 @@ def test_respects_disabled_circuit_breaker(monkeypatch):
     creators = [_candidate("dudedad")]
     discover.verify_reported_followers_with_meta(creators, "fake-token", "fake-biz-id")
     assert creators[0]["follower_verification"] == "reported"
+
+
+def test_captures_bio_and_recent_captions_from_meta(monkeypatch):
+    """Real bug found by tracing why Sonnet refinement's notes always say
+    'no post captions available' even for candidates Meta successfully
+    verified: the original version of this function only kept
+    followers_count/total_posts, discarding the bio/media data Meta
+    returns in the same response. Confirmed here so it can't regress."""
+    _reset_business_discovery_state(monkeypatch)
+    monkeypatch.setattr(discover, "_call_business_discovery", lambda handle, token, biz_id: ({
+        "followers_count": 1495960, "media_count": 3117,
+        "biography": "Dad. Husband. Being a dude while staying a dad.",
+        "media": {"data": [
+            {"caption": "Shower to garage in 90 seconds flat", "timestamp": "2026-08-01"},
+            {"caption": "Kids destroyed the DIY project again", "timestamp": "2026-07-28"},
+        ]},
+    }, None))
+
+    creators = [_candidate("dudedad", followers_count=1500000)]
+    discover.verify_reported_followers_with_meta(creators, "fake-token", "fake-biz-id")
+
+    c = creators[0]
+    assert c["bio"] == "Dad. Husband. Being a dude while staying a dad."
+    assert c["recent_captions"] == ["Shower to garage in 90 seconds flat", "Kids destroyed the DIY project again"]
+
+
+def test_does_not_overwrite_existing_bio(monkeypatch):
+    """A bio already sourced from Serper/Tavily shouldn't be clobbered by
+    an empty Meta biography field."""
+    _reset_business_discovery_state(monkeypatch)
+    monkeypatch.setattr(discover, "_call_business_discovery",
+                         lambda handle, token, biz_id: ({"followers_count": 1000, "biography": ""}, None))
+
+    c = _candidate("dudedad")
+    c["bio"] = "existing bio from serper"
+    discover.verify_reported_followers_with_meta([c], "fake-token", "fake-biz-id")
+    assert c["bio"] == "existing bio from serper"
+
+
+def test_pre_refinement_verification_runs_on_pool_not_just_final_result():
+    """The ordering fix: verification must be reachable BEFORE Sonnet
+    refinement, not only after truncation to result_limit — otherwise
+    refinement never sees the captions it needs. This test just confirms
+    the function accepts and correctly filters a pool-sized list (more
+    than result_limit), which is what the pre-refinement call site now
+    passes it."""
+    pool = [_candidate(f"creator{i}", followers_count=10000 + i) for i in range(15)]
+    # No credentials — should no-op cleanly regardless of pool size, same
+    # contract as the smaller final_creators call.
+    discover.verify_reported_followers_with_meta(pool, None, None)
+    assert all(c["follower_verification"] == "reported" for c in pool)
