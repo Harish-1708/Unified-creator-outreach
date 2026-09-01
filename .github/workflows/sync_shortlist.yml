@@ -6,6 +6,9 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discovery
     steps:
       - uses: actions/checkout@v4
 
