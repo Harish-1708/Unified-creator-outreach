@@ -35,7 +35,7 @@ SECTOR_HEADERS = [
     "niche_match", "audience_match", "location_match",
     "content_angle_strength", "partnership_signal_score", "overall_fit", "fit_explanation",
     "content_angle", "brand_affinity_note", "partnership_signal_matched", "competitor_affinity",
-    "dr_audience_gender", "dr_research_confidence", "dr_concerns",
+    "dr_audience_gender", "dr_research_confidence", "dr_concerns", "dr_name",
     "recent_post_captions",
     "outreach_readiness",
     "total_posts", "followers_count", "follower_verification", "follower_source",
