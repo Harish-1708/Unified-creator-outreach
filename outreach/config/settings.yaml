@@ -1,0 +1,52 @@
+# Global settings, shared by every campaign. A campaign does NOT need to be
+# listed anywhere here — it exists purely by having a folder under
+# templates/<campaign_name>/, and its stages/variants are AUTO-DISCOVERED
+# from whichever template files are actually in that folder (1 stage + 1
+# variant is a perfectly valid minimal campaign; 5 stages x A-D is the
+# max). See config/campaigns/ for optional per-campaign overrides, needed
+# only if a campaign wants non-default timing/limits or to force an exact
+# stage/variant shape.
+
+shared_sheet_id: "1beCHJ9dIZV2YW9BR5SmMhnAGv_F8ko0lMjRLtzL5Bzw"
+
+# Which sending account to use when a lead's own SenderAccount cell is blank
+# and the campaign doesn't set its own default_sender_account. Must match a
+# key in the EMAIL_ACCOUNTS_JSON secret.
+email_accounts:
+  default_account: "sales1"
+
+# Every campaign inherits ALL of this unless its own
+# config/campaigns/<name>.yaml overrides part of it. Most campaigns need no
+# override file at all.
+default_campaign_settings:
+  # Used ONLY as a lookup table when auto-discovering a campaign's stages
+  # from its template files — NOT a requirement that all five must exist.
+  # A campaign with just intro_A.txt is valid; it simply won't use most of
+  # this table. Only consulted for stage names actually found on disk.
+  stage_wait_days:
+    intro: 0
+    followup1: 3
+    followup2: 4
+    followup3: 5
+    followup4: 5
+
+  sending:
+    timezone: "Asia/Kolkata"
+    window_start: "09:00"
+    window_end: "17:00"
+    # Wait BETWEEN CONCURRENT SENDING ROUNDS (a random point in this
+    # window), not between individual emails. Every lead in a round shares
+    # no sender account with any other lead in that round, so a round of
+    # N distinct accounts sends N emails at the same moment; only then
+    # does the system wait this long before building the next round. With
+    # a single sending account this collapses to "wait this long between
+    # every email," same as before. See README Section 11.
+    delay_min_minutes: 3
+    delay_max_minutes: 7
+    daily_limit: 100
+    sender_rotation: false
+    # per_account_daily_limit: 5
+    # rotation_accounts: ["sales1", "sales2"]
+
+  reply_monitor:
+    lookback_hours: 24
