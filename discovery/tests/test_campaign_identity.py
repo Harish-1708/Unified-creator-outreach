@@ -221,3 +221,21 @@ def test_write_excluded_stamps_campaign(monkeypatch):
 
     discover.write_excluded(_FakeSheetRef(), excluded, campaign="DudeRobe")
     assert ws.get_all_records()[0]["Campaign"] == "DudeRobe"
+
+
+def test_dr_audience_gender_and_concerns_reach_master_row():
+    """Real gap found reviewing an actual Deep Research report against the
+    Master sheet: audience_gender/research_confidence/concerns were already
+    extracted and already fed into scoring, but never reached MASTER_HEADERS
+    — a human reviewer had no direct visibility into them, only the LLM did."""
+    creator = {h: "" for h in discover.MASTER_HEADERS}
+    creator["dr_audience_gender"] = "72.3% Female / 27.7% Male"
+    creator["dr_research_confidence"] = "HIGH"
+    creator["dr_concerns"] = "Premium sponsorship rates due to mega tier scale"
+
+    row = discover.build_master_row(creator, primary_niche="men's loungewear")
+    row_by_header = dict(zip(discover.MASTER_HEADERS, row))
+
+    assert row_by_header["dr_audience_gender"] == "72.3% Female / 27.7% Male"
+    assert row_by_header["dr_research_confidence"] == "HIGH"
+    assert row_by_header["dr_concerns"] == "Premium sponsorship rates due to mega tier scale"
