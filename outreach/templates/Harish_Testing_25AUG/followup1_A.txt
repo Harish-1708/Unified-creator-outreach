@@ -1,0 +1,10 @@
+Subject: 
+
+Hi {{FirstName}},
+
+Just wanted to make sure you saw my note below regarding your video.
+
+If you're interested, happy to answer any questions or discuss the details. If not, no worries — we won't reach out again.
+
+Thanks,
+Harish

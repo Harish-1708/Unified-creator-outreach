@@ -1,0 +1,10 @@
+Subject: 
+
+Hi {{FirstName}},
+
+Just wanted to make sure you saw this.
+
+We're still looking to license your video for Meta ads. If you're interested, let me know. If not, no worries — we won't reach out again.
+
+Thanks,
+Harish

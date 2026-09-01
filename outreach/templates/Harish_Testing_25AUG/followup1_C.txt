@@ -1,0 +1,10 @@
+Subject: 
+
+Hi {{FirstName}},
+
+Just following up to make sure my previous email didn't get missed.
+
+If this is something you'd be interested in, I'd be happy to hear from you. Otherwise, no worries at all — we'll close the loop and won't reach out again.
+
+Thanks,
+Harish
