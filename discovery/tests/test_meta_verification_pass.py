@@ -177,3 +177,26 @@ def test_pre_refinement_verification_runs_on_pool_not_just_final_result():
     # contract as the smaller final_creators call.
     discover.verify_reported_followers_with_meta(pool, None, None)
     assert all(c["follower_verification"] == "reported" for c in pool)
+
+
+def test_recent_post_captions_populated_regardless_of_refinement(monkeypatch):
+    """Real gap found reviewing a run with SONNET_REFINEMENT=false: captions
+    were fetched by Meta and logged as "captured for scoring" but had no
+    scoring pass left to reach (classify_creator already ran before
+    verification), so they vanished — not shown anywhere, not used
+    anywhere. This field exists so a human can see them regardless."""
+    _reset_business_discovery_state(monkeypatch)
+    monkeypatch.setattr(discover, "_call_business_discovery", lambda handle, token, biz_id: ({
+        "followers_count": 1495960,
+        "media": {"data": [
+            {"caption": "Shower to garage in 90 seconds flat"},
+            {"caption": "Kids destroyed the DIY project again"},
+        ]},
+    }, None))
+
+    creators = [_candidate("dudedad")]
+    discover.verify_reported_followers_with_meta(creators, "fake-token", "fake-biz-id")
+
+    assert creators[0]["recent_post_captions"] == (
+        "Shower to garage in 90 seconds flat | Kids destroyed the DIY project again"
+    )
