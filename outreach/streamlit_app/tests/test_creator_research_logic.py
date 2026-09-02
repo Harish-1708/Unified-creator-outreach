@@ -121,3 +121,70 @@ def test_load_current_settings_missing_file_returns_empty_dict():
     """No campaign_settings.yaml committed yet is a legitimate, common
     starting state — must not raise."""
     assert crl.load_current_settings() == {}
+
+
+# ---------- lifecycle stage ----------
+
+def _master(review_status="", outreach_channel=""):
+    return {"review_status": review_status, "outreach_channel": outreach_channel}
+
+
+def test_stage_discovered_when_no_review_status():
+    assert crl.compute_lifecycle_stage(_master()) == "Discovered"
+    assert crl.compute_lifecycle_stage(_master(review_status="Pending")) == "Discovered"
+
+
+def test_stage_rejected():
+    assert crl.compute_lifecycle_stage(_master(review_status="Rejected")) == "Rejected"
+
+
+def test_stage_approved_no_channel_yet():
+    assert crl.compute_lifecycle_stage(_master(review_status="Approved", outreach_channel="none")) == "Approved"
+    assert crl.compute_lifecycle_stage(_master(review_status="Approved", outreach_channel="")) == "Approved"
+
+
+def test_stage_email_not_yet_pushed():
+    row = _master(review_status="Approved", outreach_channel="email")
+    assert crl.compute_lifecycle_stage(row) == "Approved — Email (not yet synced/pushed)"
+
+
+def test_stage_email_pushed():
+    row = _master(review_status="Approved", outreach_channel="email")
+    shortlist_row = {"campaign_push_status": "pushed"}
+    assert crl.compute_lifecycle_stage(row, shortlist_row) == "Email — Pushed to Outreach"
+
+
+def test_stage_email_push_failed():
+    row = _master(review_status="Approved", outreach_channel="email")
+    shortlist_row = {"campaign_push_status": "failed"}
+    assert crl.compute_lifecycle_stage(row, shortlist_row) == "Email — Push Failed"
+
+
+def test_stage_dm_draft_pending():
+    row = _master(review_status="Approved", outreach_channel="dm")
+    assert crl.compute_lifecycle_stage(row) == "Approved — DM (draft pending)"
+    shortlist_row = {"dm_status": "pending_reasoning"}
+    assert crl.compute_lifecycle_stage(row, shortlist_row) == "Approved — DM (draft pending)"
+
+
+def test_stage_dm_status_reflects_real_status():
+    row = _master(review_status="Approved", outreach_channel="dm")
+    shortlist_row = {"dm_status": "Interested"}
+    assert crl.compute_lifecycle_stage(row, shortlist_row) == "DM — Interested"
+
+
+def test_stage_rejected_takes_priority_over_channel():
+    """A row could theoretically have a stale outreach_channel from before
+    being rejected — rejection must win regardless."""
+    row = _master(review_status="Rejected", outreach_channel="email")
+    assert crl.compute_lifecycle_stage(row) == "Rejected"
+
+
+def test_index_shortlist_by_key_builds_correct_lookup():
+    shortlist_records = [
+        {"dedup_key": "a", "Campaign": "X", "dm_status": "Sent"},
+        {"dedup_key": "a", "Campaign": "Y", "dm_status": "Replied"},
+    ]
+    index = crl.index_shortlist_by_key(shortlist_records)
+    assert index[("a", "X")]["dm_status"] == "Sent"
+    assert index[("a", "Y")]["dm_status"] == "Replied"
