@@ -23,6 +23,7 @@ Two tabs are deliberately narrower than their campaigns.py counterpart:
 """
 import os
 import sys
+import time
 
 import streamlit as st
 
@@ -55,7 +56,7 @@ from sequences_logic import (  # noqa: E402
     build_variant_deletion_paths,
 )
 from campaign_builder import (  # noqa: E402
-    validate_variant_content, build_campaign_files, get_next_stage_for_campaign,
+    validate_variant_content, validate_campaign_name, build_campaign_files, get_next_stage_for_campaign,
     confirmation_matches_campaign_name, list_campaign_files_to_delete,
 )
 from campaign_status_logic import (  # noqa: E402
@@ -441,21 +442,73 @@ with tabs[1]:
         push_options = [r["dedup_key"] for r in email_rows if r.get("dedup_key")]
         if push_options:
             push_key = st.selectbox("Creator", push_options, key="workspace_push_creator")
-            push_campaign_name = st.text_input("Outreach campaign (exact templates/ folder name)",
-                                                key="workspace_push_campaign_name")
+
+            try:
+                existing_outreach_campaigns = list_campaigns()
+            except Exception:  # noqa: BLE001
+                existing_outreach_campaigns = []
+
+            # Genuinely two different destinations, made explicit rather
+            # than forcing every push through the separate "Outreach
+            # campaign" selector at the top of the Email/Schedule/
+            # Settings/Responses tabs — that selector is for MANAGING an
+            # outreach campaign that already exists; this is for GETTING
+            # a creator into one, new or existing, without leaving this
+            # section at all.
+            push_target_mode = st.radio("Send to", ["Existing outreach campaign", "+ Create new campaign"],
+                                         key="workspace_push_target_mode", horizontal=True)
+
+            if push_target_mode == "Existing outreach campaign":
+                if not existing_outreach_campaigns:
+                    st.caption("No outreach campaigns exist yet — use '+ Create new campaign' instead.")
+                    push_campaign_name = None
+                else:
+                    push_campaign_name = st.selectbox("Outreach campaign", existing_outreach_campaigns,
+                                                        key="workspace_push_existing_campaign")
+            else:
+                new_outreach_campaign_name = st.text_input("New campaign name",
+                                                             key="workspace_push_new_campaign_name")
+                st.caption("Needs a first email — this becomes the Intro, Variant A. You can add more "
+                           "variants and follow-up stages later from the Email tab.")
+                new_subject = st.text_input("Subject", key="workspace_push_new_campaign_subject")
+                new_body = st.text_area("Body", key="workspace_push_new_campaign_body", height=120)
+                push_campaign_name = new_outreach_campaign_name.strip() or None
+
             dry_run_push = st.checkbox("Dry run", value=True, key="workspace_push_dry_run")
-            if st.button("Push", type="primary", key="workspace_push_button",
-                         disabled=not push_campaign_name):
-                try:
-                    client = _get_github_client()
-                    client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
-                        "outreach_campaign": push_campaign_name,
-                        "dry_run": "true" if dry_run_push else "false",
-                        "creator_keys": push_key,
-                    })
-                    st.success("Dispatched — check 'Push Approved to Campaign' in the Actions tab.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't dispatch: {exc}")
+
+            if st.button("Push", type="primary", key="workspace_push_button", disabled=not push_campaign_name):
+                validation_error = None
+                if push_target_mode == "+ Create new campaign":
+                    validation_error = (
+                        validate_campaign_name(push_campaign_name, existing_outreach_campaigns)
+                        or validate_variant_content(new_subject, new_body, is_first_stage=True)
+                    )
+
+                if validation_error:
+                    st.error(validation_error)
+                else:
+                    try:
+                        client = _get_github_client()
+
+                        if push_target_mode == "+ Create new campaign":
+                            files = build_campaign_files(push_campaign_name, "intro",
+                                                          {"A": {"subject": new_subject, "body": new_body}})
+                            client.commit_campaign_files_directly(
+                                files=files,
+                                commit_message=f"Create campaign '{push_campaign_name}' (via Workspace, "
+                                               f"by {current_user()})")
+                            st.info(f"Campaign '{push_campaign_name}' created. Waiting a moment for it "
+                                    f"to register before pushing...")
+                            time.sleep(3)
+
+                        client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
+                            "outreach_campaign": push_campaign_name,
+                            "dry_run": "true" if dry_run_push else "false",
+                            "creator_keys": push_key,
+                        })
+                        st.success("Dispatched — check 'Push Approved to Campaign' in the Actions tab.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't dispatch: {exc}")
         else:
             st.caption("No creators routed to Email yet.")
 
