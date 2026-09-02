@@ -1,0 +1,52 @@
+name: Push Approved to Campaign
+
+on:
+  workflow_dispatch:
+    inputs:
+      outreach_campaign:
+        description: "Outreach campaign to push into — must match an existing folder under outreach/templates/ exactly (case-sensitive). This is chosen here, at push time, NOT automatically the discovery Campaign name."
+        required: true
+      dry_run:
+        description: "true to preview the mapping for every eligible creator without writing anything to either sheet"
+        required: false
+        default: "false"
+      creator_keys:
+        description: "Optional — comma-separated dedup_keys (e.g. instagram:dudedad,instagram:joshherbert) to push only those specific creators. Blank pushes every eligible row (outreach_channel=email, not yet pushed)."
+        required: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    # Runs from inside outreach/ so get_campaign()'s relative defaults
+    # (config/settings.yaml, templates/) resolve correctly — same reason
+    # every other workflow that touches outreach.py does this.
+    defaults:
+      run:
+        working-directory: outreach
+    env:
+      # Lets `import outreach` resolve from inside push_approved_to_campaign.py
+      # (which lives in bridge/, a sibling folder) and `import
+      # push_approved_to_campaign` resolve from inside run_push.py, regardless
+      # of the process's own working directory.
+      PYTHONPATH: ${{ github.workspace }}/outreach:${{ github.workspace }}/bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Write service account file
+        run: echo "$GCP_SA_KEY" > service_account.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Push approved creators to campaign
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          OUTREACH_CAMPAIGN: ${{ github.event.inputs.outreach_campaign }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          CREATOR_KEYS: ${{ github.event.inputs.creator_keys }}
+        run: python ../bridge/run_push.py
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
