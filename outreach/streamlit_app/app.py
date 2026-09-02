@@ -55,13 +55,12 @@ Use the sidebar to navigate:
 # bug). Page files themselves now have plain ASCII names.
 home_page = st.Page(_home, title="Home", icon="📬", default=True)
 workspace_page = st.Page("pages/workspace.py", title="Workspace", icon="🧭")
-analytics_page = st.Page("pages/analytics.py", title="Analytics", icon="📈")
 campaigns_page = st.Page("pages/campaigns.py", title="Campaigns", icon="🗂️")
 responses_page = st.Page("pages/responses.py", title="Responses", icon="💬")
 overview_page = st.Page("pages/overview.py", title="Overview", icon="📈")
 dashboard_page = st.Page("pages/dashboard.py", title="Dashboard", icon="📊")
 email_accounts_page = st.Page("pages/email_accounts.py", title="Email Accounts", icon="📧")
 
-nav = st.navigation([home_page, workspace_page, analytics_page, campaigns_page,
+nav = st.navigation([home_page, workspace_page, campaigns_page,
                      responses_page, overview_page, dashboard_page, email_accounts_page])
 nav.run()
