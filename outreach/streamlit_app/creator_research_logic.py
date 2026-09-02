@@ -10,6 +10,7 @@ sheet's Run Log tab, not a new table — every discovery run already stamps
 both brand_name and campaign there.
 """
 import os
+import re
 import sys
 from typing import Dict, List, Optional
 
@@ -174,6 +175,17 @@ def load_current_settings() -> Dict:
     "it'll appear... once the app finishes redeploying" behavior. Not a
     new limitation, just the same one applied consistently."""
     return cs.load_all_settings(_LOCAL_CAMPAIGN_SETTINGS_PATH)
+
+
+def sanitize_to_outreach_campaign_name(discovery_campaign: str) -> str:
+    """Discovery Campaign names commonly have spaces ('DudeRobe Creator
+    Discovery'), but outreach campaign names become GitHub folder names
+    and are restricted to letters, numbers, and underscores (see
+    campaign_builder.CAMPAIGN_NAME_RE). Deterministic — the same discovery
+    Campaign always maps to the same outreach name, so 'push this
+    creator' never has to ask which name to use."""
+    sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", discovery_campaign.strip())
+    return sanitized.strip("_") or "Campaign"
 
 
 def get_asana_sync_status(all_settings: Dict, campaign: str) -> bool:
