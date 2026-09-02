@@ -3,7 +3,7 @@
 GitHub Secrets can never be read back — not by this app, not by any
 token — so Streamlit has no way to ask GitHub "which slots are free?"
 directly. Instead, a small, non-secret YAML file is committed to the
-repo (config/email_account_slots.yaml) mapping each account's name to
+repo (outreach/config/email_account_slots.yaml) mapping each account's name to
 its slot number AND its address. Neither of those is sensitive — the
 address is the visible "From" on every email that account sends anyway —
 so this file is safe to commit in plain text, unlike the app_password,
@@ -26,7 +26,7 @@ if _REPO_ROOT not in sys.path:
 
 import outreach  # noqa: E402
 
-SLOT_MAPPING_PATH = "config/email_account_slots.yaml"
+SLOT_MAPPING_PATH = "outreach/config/email_account_slots.yaml"
 
 
 def parse_slot_mapping(raw_yaml: str) -> Dict[str, Dict]:
