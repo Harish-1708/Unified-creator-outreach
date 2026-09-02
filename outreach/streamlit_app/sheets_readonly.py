@@ -75,6 +75,17 @@ class ReadOnlySheetsConnector:
         guessing."""
         return self._ws(tab_name).row_values(1)
 
+    def get_all_records_from_tab(self, tab_name: str) -> List[Dict]:
+        """Generic read for any tab by name — for pages reading a sheet
+        this class has no named method for, because it isn't outreach.py's
+        own Leads sheet at all. The discovery pipeline's Master/Shortlist/
+        Run Log tabs live in a completely different spreadsheet with a
+        completely different schema; this class already authenticates
+        generically against any (service_account_info, sheet_id) pair, so
+        reading that sheet needs no new connector — just a way to read an
+        arbitrary tab by name once connected to it."""
+        return self._ws(tab_name).get_all_records()
+
     def get_account_health(self, tab_name: str = "Email Accounts Health") -> List[Dict]:
         """The shared (not per-campaign) account connectivity snapshot
         written by check_account_health.yml. Returns [] rather than
