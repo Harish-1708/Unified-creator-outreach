@@ -353,14 +353,37 @@ except Exception:  # noqa: BLE001
     # clear "doesn't exist yet" message rather than repeating one here.
     campaign_cfg = None
 
-tab_names = ["🔎 Creator Research", "📊 Data", "✉️ Email", "📅 Schedule", "⚙️ Settings",
+tab_names = ["📈 Analytics", "🔎 Creator Research", "📊 Data", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
 tabs = st.tabs(tab_names)
 
 # =============================================================================
-# TAB 1 — Creator Research
+# TAB 0 — Analytics, scoped to THIS campaign specifically (not the
+# separate all-campaigns view — this one's about "how is the campaign
+# I'm already inside doing", answerable from data already fetched above).
 # =============================================================================
 with tabs[0]:
+    this_campaign_rows = [r for r in crl.build_campaign_analytics(discovery_run_log, master_records)
+                           if r["Campaign"] == discovery_campaign]
+    if not this_campaign_rows:
+        st.caption("No data yet for this campaign.")
+    else:
+        row = this_campaign_rows[0]
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Runs", row["Runs"])
+        a2.metric("Found (all runs)", row["Found (all runs)"])
+        a3.metric("In Master now", row["In Master now"])
+        a4, a5, a6, a7, a8 = st.columns(5)
+        a4.metric("Approved", row["Approved"])
+        a5.metric("Rejected", row["Rejected"])
+        a6.metric("Pending", row["Pending"])
+        a7.metric("Routed to Email", row["Email"])
+        a8.metric("Routed to DM", row["DM"])
+
+# =============================================================================
+# TAB 1 — Creator Research
+# =============================================================================
+with tabs[1]:
     summary = crl.campaign_summary(discovery_run_log, discovery_campaign)
     s1, s2, s3 = st.columns(3)
     s1.metric("Runs", summary["run_count"])
@@ -576,7 +599,7 @@ with tabs[0]:
 # | Final), plus bulk review/approve — the same content as the old
 # standalone Creator Research page's Lead Data + Review sections.
 # =============================================================================
-with tabs[1]:
+with tabs[2]:
     if not HAS_DISCOVERY or not discovery_campaign:
         st.caption("Select a Brand and Discovery Campaign above.")
     else:
@@ -919,7 +942,7 @@ with tabs[1]:
 # =============================================================================
 # TAB 3 — Email (Sequences)
 # =============================================================================
-with tabs[2]:
+with tabs[3]:
     if not campaign_cfg:
         st.info(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — write its first "
                 f"email below to create it. Once created, you'll see the usual Add Variant / Add "
@@ -1107,7 +1130,7 @@ with tabs[2]:
 # =============================================================================
 # TAB 4 — Schedule
 # =============================================================================
-with tabs[3]:
+with tabs[4]:
     if not campaign_cfg:
         st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
@@ -1158,7 +1181,7 @@ with tabs[3]:
 # TAB 5 — Settings (sender accounts, limits, Sync Shortlist, Campaign
 # Settings/Asana, Backfill, Send, Danger Zone)
 # =============================================================================
-with tabs[4]:
+with tabs[5]:
     if not campaign_cfg:
         st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
@@ -1388,7 +1411,7 @@ with tabs[4]:
 # TAB 6 — Responses (simplified: read-only + check-now; full reply flow
 # with attachments stays on the existing Responses page — see module note)
 # =============================================================================
-with tabs[5]:
+with tabs[6]:
     if not campaign_cfg:
         st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
@@ -1422,7 +1445,7 @@ with tabs[5]:
 # =============================================================================
 # TAB 7 — DM Drafting
 # =============================================================================
-with tabs[6]:
+with tabs[7]:
     if not HAS_DISCOVERY or not discovery_campaign:
         st.caption("Select a Brand and Discovery Campaign above.")
     else:
