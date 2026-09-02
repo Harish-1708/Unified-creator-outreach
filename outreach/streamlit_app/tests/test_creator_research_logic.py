@@ -256,3 +256,31 @@ def test_sanitize_never_returns_empty_string():
     characters must still produce something valid, not an empty string
     that would fail campaign_builder's own 'name is required' check."""
     assert crl.sanitize_to_outreach_campaign_name("!!!") == "Campaign"
+
+
+# ---------- curated columns ----------
+
+def test_curate_row_keeps_only_curated_columns():
+    row = {"dedup_key": "instagram:dudedad", "username": "dudedad", "platform": "instagram",
+           "some_huge_evidence_field": "lots of text nobody wants glancing at",
+           "recent_post_captions": "very long raw caption text"}
+    curated = crl.curate_row(row)
+    assert "dedup_key" in curated
+    assert "username" in curated
+    assert "some_huge_evidence_field" not in curated
+    assert "recent_post_captions" not in curated
+
+
+def test_curate_row_never_raises_for_missing_columns():
+    """Master and Shortlist don't share an identical column set —
+    dm_status only exists on Shortlist. A row missing a curated column
+    entirely must not error, just omit it."""
+    row = {"dedup_key": "instagram:dudedad"}
+    curated = crl.curate_row(row)
+    assert curated == {"dedup_key": "instagram:dudedad"}
+
+
+def test_curate_row_never_invents_values():
+    row = {"dedup_key": "instagram:dudedad", "platform": "instagram"}
+    curated = crl.curate_row(row)
+    assert "dm_status" not in curated  # not present on input, must not appear with a blank/None value
