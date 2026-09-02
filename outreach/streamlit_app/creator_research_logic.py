@@ -21,6 +21,9 @@ from typing import Dict, List
 _DISCOVERY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "discovery")
 sys.path.insert(0, os.path.normpath(_DISCOVERY_DIR))
 import campaign_settings as cs  # noqa: E402
+import shortlist as sl  # noqa: E402
+
+DM_STATUS_OPTIONS = sl.DM_STATUS_OPTIONS  # single source of truth stays in shortlist.py
 
 
 def list_brands(run_log_records: List[Dict]) -> List[str]:
