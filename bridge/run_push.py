@@ -4,7 +4,17 @@ bridge. Connects to the discovery sheet, selects eligible Shortlist rows,
 hands them to push_approved_to_campaign.py, and prints a clear per-creator
 summary. All the actual mapping/push logic lives there — this file only
 handles env vars, the discovery-sheet connection, and reporting.
+
+GOOGLE_SERVICE_ACCOUNT_JSON here holds the RAW service account key JSON
+text itself (not a file path) — deliberately matching outreach.py's own
+_build_gspread_client() convention, since push_creators_to_outreach()
+builds a SheetsConnector internally using that exact function. Using a
+file path here (discover.py's convention) would satisfy this script's own
+connection but break the bridge's the moment it tries to connect to the
+outreach sheet — which is exactly the bug this comment exists to prevent
+reintroducing.
 """
+import json
 import os
 import sys
 
@@ -60,9 +70,13 @@ def main():
         print(f"Missing required input(s)/secret(s): {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
-    creds = Credentials.from_service_account_file(
-        os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"], scopes=SHEETS_SCOPES
-    )
+    creds_raw = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+    try:
+        creds_info = json.loads(creds_raw)
+    except json.JSONDecodeError as exc:
+        print(f"GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    creds = Credentials.from_service_account_info(creds_info, scopes=SHEETS_SCOPES)
     gc = gspread.authorize(creds)
     sheet = gc.open_by_key(os.environ["SPREADSHEET_ID"])
     shortlist_ws = sheet.worksheet("Shortlist")
