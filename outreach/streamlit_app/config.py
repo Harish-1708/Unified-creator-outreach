@@ -25,6 +25,7 @@ WORKFLOW_SEND_REPLY = "send_reply.yml"
 WORKFLOW_MARK_RESPONSES_READ = "mark_responses_read.yml"
 WORKFLOW_CHECK_ACCOUNT_HEALTH = "check_account_health.yml"
 WORKFLOW_UPDATE_REVIEW_DECISION = "update_review_decision.yml"
+WORKFLOW_UPDATE_DM_STATUS = "update_dm_status.yml"
 WORKFLOW_SYNC_SHORTLIST = "sync_shortlist.yml"
 WORKFLOW_PUSH_TO_CAMPAIGN = "push_to_campaign.yml"
 
