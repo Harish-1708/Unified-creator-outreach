@@ -55,3 +55,52 @@ def test_row_numbers_reconstructed_correctly():
     eligible = select_eligible_rows(records)
     rows_by_key = {r["dedup_key"]: r["_row"] for r in eligible}
     assert rows_by_key == {"a": 2, "b": 3}
+
+
+def test_credentials_loaded_as_raw_json_content_not_a_file_path(monkeypatch, tmp_path):
+    """Regression test for a real bug: GOOGLE_SERVICE_ACCOUNT_JSON must be
+    parsed as raw JSON text via from_service_account_info(), matching
+    outreach.py's own convention — NOT treated as a file path via
+    from_service_account_file() (discover.py's convention). Using the
+    wrong one here works fine for this script's own sheet connection but
+    breaks the moment push_creators_to_outreach() builds a SheetsConnector
+    internally, which always uses outreach.py's convention."""
+    import run_push
+
+    fake_key_json = '{"type": "service_account", "client_email": "x@y.iam.gserviceaccount.com"}'
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", fake_key_json)
+    monkeypatch.setenv("SPREADSHEET_ID", "fake-id")
+    monkeypatch.setenv("OUTREACH_CAMPAIGN", "Kelson_Creators_Licensing")
+
+    calls = {}
+
+    def _fake_from_service_account_info(info, scopes=None):
+        calls["info"] = info
+        calls["scopes"] = scopes
+        return "fake-creds"
+
+    def _fail_if_called_as_file(*a, **k):
+        raise AssertionError("must not call from_service_account_file — this env var is JSON content, not a path")
+
+    monkeypatch.setattr(run_push.Credentials, "from_service_account_info", _fake_from_service_account_info)
+    monkeypatch.setattr(run_push.Credentials, "from_service_account_file", _fail_if_called_as_file)
+    monkeypatch.setattr(run_push.gspread, "authorize", lambda creds: _FakeClientNoLeads())
+
+    run_push.main()
+
+    assert calls["info"]["client_email"] == "x@y.iam.gserviceaccount.com"
+
+
+class _FakeClientNoLeads:
+    def open_by_key(self, sheet_id):
+        return _FakeSheetNoLeads()
+
+
+class _FakeSheetNoLeads:
+    def worksheet(self, title):
+        return _FakeWorksheetNoRecords()
+
+
+class _FakeWorksheetNoRecords:
+    def get_all_records(self):
+        return []
