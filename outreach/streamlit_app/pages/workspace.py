@@ -606,11 +606,12 @@ with tabs[1]:
                 # Direct in-table selection via a checkbox column,
                 # replacing the separate multiselect below the table —
                 # select rows right where you're already looking at them.
-                editable_rows = [{"Select": False, **r} for r in rows]
+                editable_rows = [{"Select": False, **crl.reorder_priority_columns(
+                    r, ["dedup_key", "username", "contact_email"])} for r in rows]
                 data_columns = list(editable_rows[0].keys())
                 edited_rows = st.data_editor(
                     editable_rows,
-                    column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+                    column_config={"Select": st.column_config.CheckboxColumn(required=True, pinned=True)},
                     disabled=[c for c in data_columns if c != "Select"],
                     hide_index=True,
                     use_container_width=True,
@@ -805,22 +806,38 @@ with tabs[1]:
                                      + "; ".join(failed_lines))
         with inner_tabs[1]:
             if excluded_campaign_rows:
-                st.dataframe(excluded_campaign_rows, use_container_width=True)
+                editable_excluded_rows = [{"Select": False, **r} for r in excluded_campaign_rows]
+                excluded_columns = list(editable_excluded_rows[0].keys())
+                edited_excluded_rows = st.data_editor(
+                    editable_excluded_rows,
+                    column_config={"Select": st.column_config.CheckboxColumn(required=True, pinned=True)},
+                    disabled=[c for c in excluded_columns if c != "Select"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key="workspace_excluded_data_editor",
+                )
+                selected_excluded_keys = [r["dedup_key"] for r in edited_excluded_rows
+                                           if r.get("Select") and r.get("dedup_key")]
+
                 st.divider()
                 st.subheader("Move to Master")
-                excluded_options = [r["dedup_key"] for r in excluded_campaign_rows if r.get("dedup_key")]
-                promote_key = st.selectbox("Creator", excluded_options, key="workspace_promote_creator")
-                if st.button("Move to Master", type="primary", key="workspace_promote_button"):
-                    try:
-                        client = _get_github_client()
-                        client.dispatch_workflow(config.WORKFLOW_PROMOTE_EXCLUDED, {
-                            "creator_key": promote_key,
-                            "campaign": discovery_campaign,
-                        })
-                        st.success("Dispatched — check 'Promote Excluded Creator' in the Actions tab. "
-                                   "It'll show up in Master, and disappear from here, once it completes.")
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't dispatch: {exc}")
+                if not selected_excluded_keys:
+                    st.caption("Tick the Select column above on one or more rows to move them.")
+                else:
+                    st.write(f"**{len(selected_excluded_keys)} selected:** {', '.join(selected_excluded_keys)}")
+                    if st.button(f"Move {len(selected_excluded_keys)} to Master", type="primary",
+                                 key="workspace_promote_button"):
+                        try:
+                            client = _get_github_client()
+                            client.dispatch_workflow(config.WORKFLOW_PROMOTE_EXCLUDED, {
+                                "creator_key": ",".join(selected_excluded_keys),
+                                "campaign": discovery_campaign,
+                            })
+                            st.success("Dispatched — check 'Promote Excluded Creator' in the Actions "
+                                       "tab. They'll show up in Master, and disappear from here, once "
+                                       "it completes.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't dispatch: {exc}")
             else:
                 st.caption("No excluded rows yet.")
         for inner_tab, view in zip(inner_tabs[2:], crl.LEAD_DATA_VIEWS[1:]):
@@ -836,7 +853,27 @@ with tabs[1]:
 # =============================================================================
 with tabs[2]:
     if not campaign_cfg:
-        st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
+        st.info(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — write its first "
+                f"email below to create it. Once created, you'll see the usual Add Variant / Add "
+                f"Follow-up Stage / Delete options here too.")
+        create_subject = st.text_input("Subject", key="ws_email_tab_create_subject")
+        create_body = st.text_area("Body", key="ws_email_tab_create_body", height=150)
+        if st.button("Create Campaign", type="primary", key="ws_email_tab_create_campaign"):
+            content_error = validate_variant_content(create_subject, create_body, is_first_stage=True)
+            if content_error:
+                st.error(content_error)
+            else:
+                try:
+                    files = build_campaign_files(outreach_campaign, "intro",
+                                                  {"A": {"subject": create_subject, "body": create_body}})
+                    _get_github_client().commit_campaign_files_directly(
+                        files=files,
+                        commit_message=f"Create campaign '{outreach_campaign}' (via Workspace, "
+                                       f"by {current_user()})")
+                    st.success(f"'{outreach_campaign}' created. Refresh (top of the page) to see the "
+                               f"full Email tab.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Couldn't create campaign: {exc}")
     else:
         cname = campaign_cfg["_campaign_name"]
         try:
