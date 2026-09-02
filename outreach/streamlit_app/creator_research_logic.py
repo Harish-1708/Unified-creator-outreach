@@ -62,51 +62,48 @@ def campaign_summary(run_log_records: List[Dict], campaign: str) -> Dict[str, in
 LEAD_DATA_VIEWS = ["Main", "Shortlisted", "Email", "DM", "Response", "Final"]
 
 
-def filter_shortlist_rows(shortlist_records: List[Dict], view: str) -> List[Dict]:
-    """One function for every 'Lead Data' tab — same underlying Shortlist
-    rows, sliced differently. Deliberately NOT separate data sources: a
-    creator moving from 'Shortlisted' to 'Email' to 'Response' is one row
-    changing state, not a row moving between tables.
+def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
+    """One function for every 'Lead Data' tab — same underlying MASTER
+    rows, sliced differently. Deliberately reads MASTER, not Shortlist:
+    Shortlist only ever contains rows where review_status is ALREADY
+    "Approved" (that's shortlist.py's own sync condition), so it can never
+    show a creator still pending review — exactly the thing a human needs
+    to see and act on. Master has review_status/outreach_channel directly
+    on it, updated the instant a decision is saved, with no dependency on
+    a separate Sync Shortlist step having run yet.
 
-    Main         — every row (Shortlisted already means review_status ==
-                    Approved, by construction of shortlist.py's sync
-                    condition — there's no "unapproved" row to further
-                    exclude here).
-    Shortlisted  — alias for Main, kept as an explicit view name because
-                    that's the language used when this was scoped.
+    Main         — every row, including ones nobody has reviewed yet.
+                    This is the review queue.
+    Shortlisted  — review_status == Approved specifically (no longer an
+                    alias for "everything", now that Main can include
+                    pending/rejected rows too).
     Email        — outreach_channel == email.
     DM           — outreach_channel == dm.
-    Response     — has a recorded reply/response signal. Uses dm_status
-                    for DM rows (anything past 'pending_reasoning' — a
-                    human has actually recorded an outcome); for Email
-                    rows, response state lives in outreach.py's OWN
-                    Response Sheet, a different spreadsheet entirely, and
-                    isn't duplicated here — this view only ever shows DM
-                    response state directly.
+    Response     — has a recorded DM outcome (dm_status set to something
+                    other than blank or the "pending_reasoning" default).
+                    Email-side response state lives entirely in
+                    outreach.py's own Response Sheet, a different
+                    spreadsheet, and isn't duplicated here.
     Final        — review_status is Rejected. (A DM-side "closed/final"
                     concept will extend this once the DM Queue page exists
                     and defines its own status vocabulary — not guessed at
                     here ahead of that.)
     """
-    if view in ("Main", "Shortlisted"):
-        return list(shortlist_records)
+    if view == "Main":
+        return list(master_records)
+    if view == "Shortlisted":
+        return [r for r in master_records if r.get("review_status", "").strip().lower() == "approved"]
     if view == "Email":
-        return [r for r in shortlist_records if r.get("outreach_channel", "").strip().lower() == "email"]
+        return [r for r in master_records if r.get("outreach_channel", "").strip().lower() == "email"]
     if view == "DM":
-        return [r for r in shortlist_records if r.get("outreach_channel", "").strip().lower() == "dm"]
+        return [r for r in master_records if r.get("outreach_channel", "").strip().lower() == "dm"]
     if view == "Response":
         return [
-            r for r in shortlist_records
+            r for r in master_records
             if r.get("dm_status", "").strip() not in ("", "pending_reasoning")
         ]
     if view == "Final":
-        # Only review_status == Rejected is scoped for now. A DM-side
-        # notion of "closed" needs the DM Queue's own status vocabulary
-        # to exist first — that page hasn't been built yet, so this
-        # deliberately does NOT guess at specific dm_status values that
-        # aren't a confirmed contract anywhere yet. Revisit once the DM
-        # Queue defines its real status set.
-        return [r for r in shortlist_records if r.get("review_status", "").strip().lower() == "rejected"]
+        return [r for r in master_records if r.get("review_status", "").strip().lower() == "rejected"]
     raise ValueError(f"Unknown Lead Data view '{view}' — must be one of {LEAD_DATA_VIEWS}")
 
 
