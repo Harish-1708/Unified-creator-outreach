@@ -175,6 +175,26 @@ class GitHubClient:
         encrypted = sealed_box.encrypt(plaintext.encode("utf-8"))
         return base64.b64encode(encrypted).decode("utf-8")
 
+    def set_variable(self, name: str, value: str) -> None:
+        """Repo-level Actions Variable — a DIFFERENT API from secrets
+        above (no encryption; Variables aren't sensitive by definition).
+        GitHub's Variables API distinguishes create from update at the
+        HTTP-method level (POST vs PATCH), unlike secrets' single PUT —
+        so this checks existence first via GET, then picks the right one,
+        rather than guessing and retrying on failure."""
+        base_url = f"{GITHUB_API}/repos/{self.owner}/{self.repo}/actions/variables"
+        exists_resp = requests.get(f"{base_url}/{name}", headers=self._headers, timeout=self.timeout)
+        payload = {"name": name, "value": value}
+        if exists_resp.status_code == 200:
+            resp = requests.patch(f"{base_url}/{name}", json=payload, headers=self._headers,
+                                   timeout=self.timeout)
+            ok_codes = (204,)
+        else:
+            resp = requests.post(base_url, json=payload, headers=self._headers, timeout=self.timeout)
+            ok_codes = (201,)
+        if resp.status_code not in ok_codes:
+            raise GitHubActionsError(f"Failed to set variable '{name}': {resp.status_code} {resp.text[:300]}")
+
     def set_secret(self, secret_name: str, plaintext_value: str) -> None:
         """Encrypts plaintext_value with the repo's CURRENT public key
         (fetched fresh, never cached — see get_repo_public_key) and sets
