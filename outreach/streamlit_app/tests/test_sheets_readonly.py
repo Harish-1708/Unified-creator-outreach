@@ -124,3 +124,21 @@ def test_get_account_health_respects_custom_tab_name():
     connector = ReadOnlySheetsConnector(_spreadsheet=FakeSpreadsheet({"Custom Tab Name": ws}))
     records = connector.get_account_health(tab_name="Custom Tab Name")
     assert len(records) == 1
+
+
+def test_get_all_records_from_tab_reads_a_named_tab_generically():
+    """Confirms the new generic method works for a tab this class has no
+    dedicated method for — e.g. the discovery pipeline's own Shortlist
+    tab, a completely different sheet/schema than outreach.py's own."""
+    ws = FakeWorksheet([{"dedup_key": "instagram:dudedad", "review_status": "Approved"}])
+    connector = ReadOnlySheetsConnector(_spreadsheet=FakeSpreadsheet({"Shortlist": ws}))
+    records = connector.get_all_records_from_tab("Shortlist")
+    assert records[0]["dedup_key"] == "instagram:dudedad"
+
+
+def test_get_all_records_from_tab_raises_clearly_for_missing_tab():
+    connector = ReadOnlySheetsConnector(_spreadsheet=FakeSpreadsheet({}))
+    import pytest
+    from sheets_readonly import ReadOnlySheetsError
+    with pytest.raises(ReadOnlySheetsError):
+        connector.get_all_records_from_tab("Shortlist")
