@@ -127,6 +127,8 @@ if not HAS_DISCOVERY:
 # =============================================================================
 discovery_campaign = None
 discovery_run_log = []
+master_records = []
+excluded_records = []
 if HAS_DISCOVERY:
     try:
         discovery_connector = _get_discovery_connector()
@@ -134,6 +136,14 @@ if HAS_DISCOVERY:
     except Exception as exc:  # noqa: BLE001
         st.error(f"Couldn't read the discovery sheet: {exc}")
         discovery_run_log = []
+    try:
+        master_records = discovery_connector.get_all_records_from_tab("Master")
+    except Exception:  # noqa: BLE001
+        master_records = []
+    try:
+        excluded_records = discovery_connector.get_all_records_from_tab("Excluded")
+    except Exception:  # noqa: BLE001
+        excluded_records = []
 
     all_settings_top = crl.load_current_settings()
 
@@ -234,11 +244,21 @@ if HAS_DISCOVERY:
                 if not campaigns_for_this_brand:
                     st.caption("No campaigns yet for this brand.")
                 else:
-                    chosen = st.radio("Campaign", campaigns_for_this_brand, key=f"workspace_campaign_radio_{b}")
-                    if st.button("Use this campaign", key=f"workspace_use_campaign_{b}"):
-                        st.session_state["workspace_selected_brand"] = b
-                        st.session_state["workspace_active_discovery_campaign"] = chosen
-                        st.rerun()
+                    for camp in campaigns_for_this_brand:
+                        summary = crl.campaign_summary(discovery_run_log, camp)
+                        master_count = len([r for r in master_records if r.get("Campaign") == camp])
+                        excluded_count = len([r for r in excluded_records if r.get("Campaign") == camp])
+                        with st.container(border=True):
+                            c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                            c1.markdown(f"**{camp}**")
+                            c2.write(f"{summary['run_count']} run(s)")
+                            c3.write(f"{summary['total_found']} found")
+                            c4.write(f"{master_count} in Master")
+                            c5.write(f"{excluded_count} excluded")
+                            if st.button("Open →", key=f"workspace_open_campaign_{b}_{camp}"):
+                                st.session_state["workspace_selected_brand"] = b
+                                st.session_state["workspace_active_discovery_campaign"] = camp
+                                st.rerun()
 
     discovery_campaign = st.session_state.get("workspace_active_discovery_campaign")
     if not discovery_campaign:
@@ -271,18 +291,11 @@ with tabs[0]:
         s2.metric("Total found (all runs)", summary["total_found"])
         s3.metric("Written to Master (all runs)", summary["total_after_filters"])
 
-        try:
-            master_records_cr = discovery_connector.get_all_records_from_tab("Master")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Couldn't read Master: {exc}")
-            master_records_cr = []
-        try:
-            excluded_records_cr = discovery_connector.get_all_records_from_tab("Excluded")
-        except Exception:  # noqa: BLE001
-            excluded_records_cr = []
-
-        cr_master_rows = [r for r in master_records_cr if r.get("Campaign") == discovery_campaign]
-        cr_excluded_rows = [r for r in excluded_records_cr if r.get("Campaign") == discovery_campaign]
+        # Reuses master_records/excluded_records fetched once at the top of
+        # the page (for the brand-card stats above) rather than re-reading
+        # the same tabs again here.
+        cr_master_rows = [r for r in master_records if r.get("Campaign") == discovery_campaign]
+        cr_excluded_rows = [r for r in excluded_records if r.get("Campaign") == discovery_campaign]
 
         st.write(f"**Master:** {len(cr_master_rows)} row(s) · **Excluded:** {len(cr_excluded_rows)} row(s)")
 
@@ -312,19 +325,13 @@ with tabs[1]:
     if not HAS_DISCOVERY or not discovery_campaign:
         st.caption("Select a Brand and Discovery Campaign above.")
     else:
-        try:
-            master_records = discovery_connector.get_all_records_from_tab("Master")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Couldn't read Master: {exc}")
-            master_records = []
+        # master_records/excluded_records reused from the top-level fetch
+        # (used for the brand cards) — only Shortlist is fetched fresh
+        # here, since nothing else on the page needs it yet.
         try:
             shortlist_records = discovery_connector.get_all_records_from_tab("Shortlist")
         except Exception:  # noqa: BLE001
             shortlist_records = []
-        try:
-            excluded_records = discovery_connector.get_all_records_from_tab("Excluded")
-        except Exception:  # noqa: BLE001
-            excluded_records = []
 
         shortlist_index = crl.index_shortlist_by_key(shortlist_records)
         campaign_rows = [r for r in master_records if r.get("Campaign") == discovery_campaign]
