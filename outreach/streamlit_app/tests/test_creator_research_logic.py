@@ -188,3 +188,33 @@ def test_index_shortlist_by_key_builds_correct_lookup():
     index = crl.index_shortlist_by_key(shortlist_records)
     assert index[("a", "X")]["dm_status"] == "Sent"
     assert index[("a", "Y")]["dm_status"] == "Replied"
+
+
+# ---------- brand/campaign registry wrappers ----------
+
+def test_load_brand_registry_missing_file_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(crl, "_DISCOVERY_DIR", str(tmp_path))
+    assert crl.load_brand_registry() == []
+
+
+def test_list_all_brands_combined_unions_run_log_and_registry(monkeypatch, tmp_path):
+    monkeypatch.setattr(crl, "_DISCOVERY_DIR", str(tmp_path))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "brands.yaml").write_text("- RegistryBrand\n")
+    run_log = [_run("RunLogBrand", "SomeCampaign")]
+    result = crl.list_all_brands_combined(run_log, {})
+    assert result == ["RegistryBrand", "RunLogBrand"]
+
+
+def test_build_add_campaign_commit_raises_on_conflict():
+    import pytest
+    existing = {"X": {"brand_name": "BrandA", "asana_sync": False}}
+    with pytest.raises(ValueError):
+        crl.build_add_campaign_commit(existing, "X", "BrandB")
+
+
+def test_build_add_brand_commit_shape():
+    commit = crl.build_add_brand_commit(["DudeRobe"], "SheRobe")
+    assert commit["path"] == "discovery/config/brands.yaml"
+    assert b"SheRobe" in commit["content"]
+    assert "SheRobe" in commit["commit_message"]
