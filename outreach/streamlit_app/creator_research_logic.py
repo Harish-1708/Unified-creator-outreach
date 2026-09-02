@@ -217,6 +217,35 @@ def sanitize_to_outreach_campaign_name(discovery_campaign: str) -> str:
     return sanitized.strip("_") or "Campaign"
 
 
+def build_single_campaign_table(run_log_records: List[Dict], master_rows_for_campaign: List[Dict],
+                                 excluded_rows_for_campaign: List[Dict]) -> List[Dict]:
+    """Pure — one row per metric, in the order requested, ready to hand
+    straight to st.dataframe/st.table for a clean two-column display.
+    Deliberately reuses filter_creator_rows for Shortlisted/Email/DM/
+    Response/Final rather than recomputing them a different way — this
+    guarantees these numbers always match what you'd count by actually
+    opening each Data sub-tab, never a second, differently-derived
+    version of the same thing that could quietly disagree with it."""
+    total_found = 0
+    for r in run_log_records:
+        try:
+            total_found += int(r.get("total_found") or 0)
+        except (TypeError, ValueError):
+            continue
+
+    metrics = [
+        ("Total Found (all runs)", total_found),
+        ("Total Master", len(master_rows_for_campaign)),
+        ("Total Excluded", len(excluded_rows_for_campaign)),
+        ("Total Shortlisted", len(filter_creator_rows(master_rows_for_campaign, "Shortlisted"))),
+        ("Total Email", len(filter_creator_rows(master_rows_for_campaign, "Email"))),
+        ("Total DM", len(filter_creator_rows(master_rows_for_campaign, "DM"))),
+        ("Total Response", len(filter_creator_rows(master_rows_for_campaign, "Response"))),
+        ("Total Final", len(filter_creator_rows(master_rows_for_campaign, "Final"))),
+    ]
+    return [{"Metric": name, "Count": count} for name, count in metrics]
+
+
 def build_campaign_analytics(run_log_records: List[Dict], master_records: List[Dict]) -> List[Dict]:
     """Pure — one summary row per (brand, campaign) pair found in Run Log,
     with creator counts pulled from Master. A campaign with real Run Log
