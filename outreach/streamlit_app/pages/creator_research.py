@@ -93,42 +93,8 @@ st.caption(
 
 st.divider()
 
-# =============================================================================
-# Campaign Settings — Asana sync
-# =============================================================================
-with st.expander("⚙️ Campaign Settings"):
-    all_settings = crl.load_current_settings()
-    current_status = crl.get_asana_sync_status(all_settings, campaign)
-
-    st.write(
-        f"**Asana sync for '{campaign}'**: currently "
-        + ("✅ ON" if current_status else "❌ OFF")
-    )
-    st.caption(
-        "Controls BOTH Email and DM creators from this campaign — there's no separate "
-        "setting per channel. A campaign that's never been configured defaults to OFF, so a "
-        "new test campaign never starts syncing to Asana just because nobody's visited this "
-        "page yet."
-    )
-
-    new_status = st.toggle("Enable Asana sync for this campaign", value=current_status,
-                            key=f"asana_toggle_{campaign}")
-
-    if new_status != current_status:
-        if st.button("Save Settings", type="primary", key=f"save_settings_{campaign}"):
-            try:
-                commit = crl.build_settings_commit(all_settings, campaign, new_status)
-                client = _get_github_client()
-                client.commit_campaign_files_directly(
-                    files=[{"path": commit["path"], "content": commit["content"]}],
-                    commit_message=commit["commit_message"],
-                )
-                st.success(
-                    "Saved. It'll take effect here once the app finishes redeploying — "
-                    "same as any other settings change in this app."
-                )
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Couldn't save settings: {exc}")
+st.info("⚙️ Campaign Settings (Asana sync) now lives on the **Settings** page, alongside sender "
+        "accounts and sending limits — not duplicated here.")
 
 st.divider()
 
@@ -271,25 +237,8 @@ else:
 
 st.divider()
 
-# =============================================================================
-# Sync Shortlist — a decision saved above only reaches the Shortlist tab
-# (what dm_drafting.py and the outreach bridge actually read from) once
-# this runs. Deliberately a separate, visible step, not automatic — same
-# reasoning as every other stage boundary in this pipeline.
-# =============================================================================
-st.subheader("Sync Shortlist")
-st.caption(
-    "A saved decision above updates Master immediately, but doesn't reach the Shortlist tab "
-    "— what DM drafting and the 'Push to Outreach' step below actually read from — until this "
-    "runs. Safe to run any time; it only ever adds newly-approved rows, never removes anything."
-)
-if st.button("Run Sync Shortlist Now"):
-    try:
-        client = _get_github_client()
-        client.dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
-        st.success("Dispatched — check the 'Sync Shortlist' workflow run in the Actions tab.")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Couldn't dispatch Sync Shortlist: {exc}")
+st.info("🔄 **Sync Shortlist** now lives on the **Settings** page too — run it there after saving "
+        "a decision above, before pushing to outreach or checking DM Queue.")
 
 st.divider()
 
