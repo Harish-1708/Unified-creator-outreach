@@ -438,6 +438,11 @@ with tabs[0]:
             search_vocabulary_input = st.text_area(
                 "Search vocabulary (optional — your own terms/hashtags/archetypes; leave blank to let "
                 "Claude expand it)", key="workspace_discover_search_vocab", height=80)
+            deep_research_report_input = st.text_area(
+                "Deep Research report (optional) — a Gemini chat share link, a Google Doc URL, or "
+                "pasted text directly. This is a REPO-WIDE setting, not per-run: saving it here updates "
+                "it for every future run until changed again, not just this one.",
+                key="workspace_discover_deep_research", height=100)
 
         run_submitted = st.form_submit_button("🚀 Run Research", type="primary")
 
@@ -450,6 +455,14 @@ with tabs[0]:
         else:
             try:
                 client = _get_github_client()
+                if deep_research_report_input.strip():
+                    # Repo-wide Variable, not a workflow input (discover.yml
+                    # itself reads this from vars.DEEP_RESEARCH_REPORT, not
+                    # github.event.inputs — see its own comment block). Only
+                    # touched when the field is non-empty, so leaving it
+                    # blank here never accidentally clears an existing value
+                    # someone else set.
+                    client.set_variable("DEEP_RESEARCH_REPORT", deep_research_report_input.strip())
                 run_details = client.dispatch_workflow(config.WORKFLOW_DISCOVER, {
                     "campaign": discovery_campaign,
                     "niche": niche_input,
@@ -556,10 +569,216 @@ with tabs[1]:
 
         with inner_tabs[0]:
             rows = crl.filter_creator_rows(campaign_rows, "Master")
-            if rows:
-                st.dataframe(rows, use_container_width=True)
-            else:
+            if not rows:
                 st.caption("No rows yet.")
+            else:
+                # Direct in-table selection via a checkbox column,
+                # replacing the separate multiselect below the table —
+                # select rows right where you're already looking at them.
+                editable_rows = [{"Select": False, **r} for r in rows]
+                data_columns = list(editable_rows[0].keys())
+                edited_rows = st.data_editor(
+                    editable_rows,
+                    column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+                    disabled=[c for c in data_columns if c != "Select"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key="workspace_master_data_editor",
+                )
+                selected_keys = [r["dedup_key"] for r in edited_rows if r.get("Select") and r.get("dedup_key")]
+
+                st.divider()
+                st.subheader("Actions for selected creator(s)")
+                if not selected_keys:
+                    st.caption("Tick the Select column above on one or more rows to act on them.")
+                else:
+                    st.write(f"**{len(selected_keys)} selected:** {', '.join(selected_keys)}")
+                    new_review_status = st.radio("Review status", ["Approved", "Rejected", "Pending"],
+                                                  key="workspace_review_status_radio")
+                    new_channel = st.radio("Outreach channel", ["email", "dm", "none"],
+                                            key="workspace_review_channel_radio")
+                    if st.button(f"Save Decision for {len(selected_keys)} creator(s)", type="primary",
+                                 key="workspace_save_review_decision"):
+                        try:
+                            client = _get_github_client()
+                            client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
+                                "creator_key": ",".join(selected_keys),
+                                "campaign": discovery_campaign,
+                                "review_status": new_review_status,
+                                "outreach_channel": new_channel,
+                            })
+                            # Auto-sync right after — the reason a creator
+                            # routed to DM didn't show up in DM Drafting
+                            # immediately before was this exact manual gap.
+                            time.sleep(2)
+                            client.dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
+                            st.success("Decision saved and Shortlist synced — check the Actions tab "
+                                       "for both runs. DM Drafting/Email views will reflect this once "
+                                       "both complete.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't dispatch: {exc}")
+
+                st.divider()
+                st.subheader("Push to Outreach")
+                email_rows = crl.filter_creator_rows(campaign_rows, "Email")
+                push_options = [r["dedup_key"] for r in email_rows if r.get("dedup_key")]
+                if push_options:
+                    push_key = st.selectbox("Creator", push_options, key="workspace_push_creator")
+
+                    # No separate outreach-campaign choice, and nothing to
+                    # create by hand: every discovery Campaign under a
+                    # brand IS the outreach campaign too — deterministically
+                    # sanitized into a valid folder name (see
+                    # sanitize_to_outreach_campaign_name's own docstring
+                    # for why: outreach names can't contain spaces).
+                    outreach_target = crl.sanitize_to_outreach_campaign_name(discovery_campaign)
+                    st.caption(f"Pushes into outreach campaign **'{outreach_target}'** — the same "
+                               f"campaign as this one, nothing separate to pick or create.")
+
+                    try:
+                        existing_outreach_campaigns = list_campaigns()
+                    except Exception:  # noqa: BLE001
+                        existing_outreach_campaigns = []
+                    campaign_already_exists = outreach_target in existing_outreach_campaigns
+
+                    new_subject, new_body = "", ""
+                    if not campaign_already_exists:
+                        st.info(f"'{outreach_target}' doesn't exist yet as an outreach campaign — write "
+                                f"its first email below and Push creates it automatically.")
+                        new_subject = st.text_input("Subject", key="workspace_push_new_campaign_subject")
+                        new_body = st.text_area("Body", key="workspace_push_new_campaign_body", height=120)
+
+                    dry_run_push = st.checkbox("Dry run", value=True, key="workspace_push_dry_run")
+
+                    if st.button("Push", type="primary", key="workspace_push_button"):
+                        validation_error = None
+                        if not campaign_already_exists:
+                            validation_error = (
+                                validate_campaign_name(outreach_target, existing_outreach_campaigns)
+                                or validate_variant_content(new_subject, new_body, is_first_stage=True)
+                            )
+                        if validation_error:
+                            st.error(validation_error)
+                        else:
+                            try:
+                                client = _get_github_client()
+                                if not campaign_already_exists:
+                                    files = build_campaign_files(outreach_target, "intro",
+                                                                  {"A": {"subject": new_subject,
+                                                                         "body": new_body}})
+                                    client.commit_campaign_files_directly(
+                                        files=files,
+                                        commit_message=f"Create campaign '{outreach_target}' (via "
+                                                       f"Workspace, by {current_user()})")
+                                    st.info(f"Campaign '{outreach_target}' created. Waiting a moment "
+                                            f"before pushing...")
+                                    time.sleep(3)
+                                client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
+                                    "outreach_campaign": outreach_target,
+                                    "dry_run": "true" if dry_run_push else "false",
+                                    "creator_keys": push_key,
+                                })
+                                st.success("Dispatched — check 'Push Approved to Campaign' in the "
+                                           "Actions tab.")
+                            except Exception as exc:  # noqa: BLE001
+                                st.error(f"Couldn't dispatch: {exc}")
+                else:
+                    st.caption("No creators routed to Email yet.")
+
+                st.divider()
+                st.subheader("+ Add Creator")
+                st.caption(
+                    "For creators that never went through discovery — a referral, someone you already "
+                    "know about. Adds directly to Master, same as a discovered row, just without any "
+                    "scores (nothing scored it). Fails clearly rather than duplicating if this creator "
+                    "already exists under this Campaign."
+                )
+                add_mode = st.radio("Mode", ["Single", "Bulk"], key="workspace_add_creator_mode",
+                                     horizontal=True)
+
+                if add_mode == "Single":
+                    ac1, ac2 = st.columns(2)
+                    with ac1:
+                        new_platform = st.text_input("Platform", key="workspace_add_platform",
+                                                      placeholder="instagram")
+                        new_username = st.text_input("Username (no @)", key="workspace_add_username")
+                        new_email = st.text_input("Contact email (optional)", key="workspace_add_email")
+                    with ac2:
+                        new_profile_link = st.text_input("Profile link (optional)",
+                                                           key="workspace_add_link")
+                        new_review_status = st.selectbox("Review status",
+                                                          ["", "Approved", "Rejected", "Pending"],
+                                                          key="workspace_add_review_status")
+                        new_add_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
+                                                        key="workspace_add_channel")
+                    new_content_angle = st.text_area("Notes (optional)", key="workspace_add_notes")
+
+                    if st.button("Add Creator", type="primary", key="workspace_add_creator_button",
+                                 disabled=not (new_platform and new_username)):
+                        try:
+                            client = _get_github_client()
+                            client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
+                                "platform": new_platform,
+                                "username": new_username,
+                                "campaign": discovery_campaign,
+                                "profile_link": new_profile_link,
+                                "contact_email": new_email,
+                                "content_angle": new_content_angle,
+                                "review_status": new_review_status,
+                                "outreach_channel": new_add_channel,
+                            })
+                            st.success("Dispatched — check 'Add Manual Creator' in the Actions tab.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't dispatch: {exc}")
+                else:
+                    st.caption(
+                        "One creator per line: `platform,username,email,profile_link` — email and "
+                        "profile_link are optional but the commas must still be there (e.g. "
+                        "`instagram,dudedad,,`). Review status and channel apply to every row."
+                    )
+                    bulk_text = st.text_area("Creators", height=150, key="workspace_bulk_add_text",
+                                              placeholder="instagram,dudedad,,\n"
+                                                          "tiktok,someuser,someone@example.com,")
+                    bc1, bc2 = st.columns(2)
+                    with bc1:
+                        bulk_review_status = st.selectbox("Review status",
+                                                           ["", "Approved", "Rejected", "Pending"],
+                                                           key="workspace_bulk_review_status")
+                    with bc2:
+                        bulk_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
+                                                     key="workspace_bulk_channel")
+
+                    if st.button("Add All", type="primary", key="workspace_bulk_add_button",
+                                 disabled=not bulk_text.strip()):
+                        lines = [ln.strip() for ln in bulk_text.strip().splitlines() if ln.strip()]
+                        client = _get_github_client()
+                        dispatched, failed_lines = 0, []
+                        for line in lines:
+                            parts = [p.strip() for p in line.split(",")]
+                            if len(parts) < 2 or not parts[0] or not parts[1]:
+                                failed_lines.append(line)
+                                continue
+                            platform_val, username_val = parts[0], parts[1]
+                            email_val = parts[2] if len(parts) > 2 else ""
+                            link_val = parts[3] if len(parts) > 3 else ""
+                            try:
+                                client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
+                                    "platform": platform_val,
+                                    "username": username_val,
+                                    "campaign": discovery_campaign,
+                                    "profile_link": link_val,
+                                    "contact_email": email_val,
+                                    "review_status": bulk_review_status,
+                                    "outreach_channel": bulk_channel,
+                                })
+                                dispatched += 1
+                            except Exception:  # noqa: BLE001
+                                failed_lines.append(line)
+                        st.success(f"Dispatched {dispatched} creator(s) — check 'Add Manual Creator' "
+                                   f"runs in the Actions tab.")
+                        if failed_lines:
+                            st.error(f"{len(failed_lines)} line(s) couldn't be parsed or dispatched: "
+                                     + "; ".join(failed_lines))
         with inner_tabs[1]:
             if excluded_campaign_rows:
                 st.dataframe(excluded_campaign_rows, use_container_width=True)
@@ -572,201 +791,6 @@ with tabs[1]:
                     st.dataframe(rows, use_container_width=True)
                 else:
                     st.caption(f"No rows in '{view}' yet.")
-
-        st.divider()
-        st.subheader("Review Creators (Master \u2192 approve/reject, choose channel)")
-        pending_rows = crl.filter_creator_rows(campaign_rows, "Master")
-        review_options = [r["dedup_key"] for r in pending_rows if r.get("dedup_key")]
-
-        if not review_options:
-            st.caption("No creators found for this campaign yet.")
-        else:
-            selected_keys = st.multiselect("Creators (select one or several)", review_options,
-                                            key="workspace_review_multiselect")
-            if selected_keys:
-                new_review_status = st.radio("Review status", ["Approved", "Rejected", "Pending"],
-                                              key="workspace_review_status_radio")
-                new_channel = st.radio("Outreach channel", ["email", "dm", "none"],
-                                        key="workspace_review_channel_radio")
-                if st.button(f"Save Decision for {len(selected_keys)} creator(s)", type="primary",
-                             key="workspace_save_review_decision"):
-                    try:
-                        client = _get_github_client()
-                        client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
-                            "creator_key": ",".join(selected_keys),
-                            "campaign": discovery_campaign,
-                            "review_status": new_review_status,
-                            "outreach_channel": new_channel,
-                        })
-                        st.success("Dispatched — check 'Update Review Decision' in the Actions tab.")
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't dispatch: {exc}")
-
-        st.divider()
-        st.subheader("Push to Outreach")
-        email_rows = crl.filter_creator_rows(campaign_rows, "Email")
-        push_options = [r["dedup_key"] for r in email_rows if r.get("dedup_key")]
-        if push_options:
-            push_key = st.selectbox("Creator", push_options, key="workspace_push_creator")
-
-            try:
-                existing_outreach_campaigns = list_campaigns()
-            except Exception:  # noqa: BLE001
-                existing_outreach_campaigns = []
-
-            # Genuinely two different destinations, made explicit rather
-            # than forcing every push through the separate "Outreach
-            # campaign" selector at the top of the Email/Schedule/
-            # Settings/Responses tabs — that selector is for MANAGING an
-            # outreach campaign that already exists; this is for GETTING
-            # a creator into one, new or existing, without leaving this
-            # section at all.
-            push_target_mode = st.radio("Send to", ["Existing outreach campaign", "+ Create new campaign"],
-                                         key="workspace_push_target_mode", horizontal=True)
-
-            if push_target_mode == "Existing outreach campaign":
-                if not existing_outreach_campaigns:
-                    st.caption("No outreach campaigns exist yet — use '+ Create new campaign' instead.")
-                    push_campaign_name = None
-                else:
-                    push_campaign_name = st.selectbox("Outreach campaign", existing_outreach_campaigns,
-                                                        key="workspace_push_existing_campaign")
-            else:
-                new_outreach_campaign_name = st.text_input("New campaign name",
-                                                             key="workspace_push_new_campaign_name")
-                st.caption("Needs a first email — this becomes the Intro, Variant A. You can add more "
-                           "variants and follow-up stages later from the Email tab.")
-                new_subject = st.text_input("Subject", key="workspace_push_new_campaign_subject")
-                new_body = st.text_area("Body", key="workspace_push_new_campaign_body", height=120)
-                push_campaign_name = new_outreach_campaign_name.strip() or None
-
-            dry_run_push = st.checkbox("Dry run", value=True, key="workspace_push_dry_run")
-
-            if st.button("Push", type="primary", key="workspace_push_button", disabled=not push_campaign_name):
-                validation_error = None
-                if push_target_mode == "+ Create new campaign":
-                    validation_error = (
-                        validate_campaign_name(push_campaign_name, existing_outreach_campaigns)
-                        or validate_variant_content(new_subject, new_body, is_first_stage=True)
-                    )
-
-                if validation_error:
-                    st.error(validation_error)
-                else:
-                    try:
-                        client = _get_github_client()
-
-                        if push_target_mode == "+ Create new campaign":
-                            files = build_campaign_files(push_campaign_name, "intro",
-                                                          {"A": {"subject": new_subject, "body": new_body}})
-                            client.commit_campaign_files_directly(
-                                files=files,
-                                commit_message=f"Create campaign '{push_campaign_name}' (via Workspace, "
-                                               f"by {current_user()})")
-                            st.info(f"Campaign '{push_campaign_name}' created. Waiting a moment for it "
-                                    f"to register before pushing...")
-                            time.sleep(3)
-
-                        client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
-                            "outreach_campaign": push_campaign_name,
-                            "dry_run": "true" if dry_run_push else "false",
-                            "creator_keys": push_key,
-                        })
-                        st.success("Dispatched — check 'Push Approved to Campaign' in the Actions tab.")
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't dispatch: {exc}")
-        else:
-            st.caption("No creators routed to Email yet.")
-
-        st.divider()
-        st.subheader("+ Add Creator")
-        st.caption(
-            "For creators that never went through discovery — a referral, someone you already know "
-            "about. Adds directly to Master, same as a discovered row, just without any scores "
-            "(nothing scored it). Fails clearly rather than duplicating if this creator already "
-            "exists under this Campaign."
-        )
-        add_mode = st.radio("Mode", ["Single", "Bulk"], key="workspace_add_creator_mode", horizontal=True)
-
-        if add_mode == "Single":
-            ac1, ac2 = st.columns(2)
-            with ac1:
-                new_platform = st.text_input("Platform", key="workspace_add_platform",
-                                              placeholder="instagram")
-                new_username = st.text_input("Username (no @)", key="workspace_add_username")
-                new_email = st.text_input("Contact email (optional)", key="workspace_add_email")
-            with ac2:
-                new_profile_link = st.text_input("Profile link (optional)", key="workspace_add_link")
-                new_review_status = st.selectbox("Review status", ["", "Approved", "Rejected", "Pending"],
-                                                  key="workspace_add_review_status")
-                new_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
-                                            key="workspace_add_channel")
-            new_content_angle = st.text_area("Notes (optional)", key="workspace_add_notes")
-
-            if st.button("Add Creator", type="primary", key="workspace_add_creator_button",
-                         disabled=not (new_platform and new_username)):
-                try:
-                    client = _get_github_client()
-                    client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
-                        "platform": new_platform,
-                        "username": new_username,
-                        "campaign": discovery_campaign,
-                        "profile_link": new_profile_link,
-                        "contact_email": new_email,
-                        "content_angle": new_content_angle,
-                        "review_status": new_review_status,
-                        "outreach_channel": new_channel,
-                    })
-                    st.success("Dispatched — check 'Add Manual Creator' in the Actions tab.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't dispatch: {exc}")
-        else:
-            st.caption(
-                "One creator per line: `platform,username,email,profile_link` — email and profile_link "
-                "are optional but the commas must still be there (e.g. `instagram,dudedad,,`). Review "
-                "status and channel apply to every row in this batch."
-            )
-            bulk_text = st.text_area("Creators", height=150, key="workspace_bulk_add_text",
-                                      placeholder="instagram,dudedad,,\ntiktok,someuser,someone@example.com,")
-            bc1, bc2 = st.columns(2)
-            with bc1:
-                bulk_review_status = st.selectbox("Review status", ["", "Approved", "Rejected", "Pending"],
-                                                   key="workspace_bulk_review_status")
-            with bc2:
-                bulk_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
-                                             key="workspace_bulk_channel")
-
-            if st.button("Add All", type="primary", key="workspace_bulk_add_button",
-                         disabled=not bulk_text.strip()):
-                lines = [ln.strip() for ln in bulk_text.strip().splitlines() if ln.strip()]
-                client = _get_github_client()
-                dispatched, failed_lines = 0, []
-                for line in lines:
-                    parts = [p.strip() for p in line.split(",")]
-                    if len(parts) < 2 or not parts[0] or not parts[1]:
-                        failed_lines.append(line)
-                        continue
-                    platform_val, username_val = parts[0], parts[1]
-                    email_val = parts[2] if len(parts) > 2 else ""
-                    link_val = parts[3] if len(parts) > 3 else ""
-                    try:
-                        client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
-                            "platform": platform_val,
-                            "username": username_val,
-                            "campaign": discovery_campaign,
-                            "profile_link": link_val,
-                            "contact_email": email_val,
-                            "review_status": bulk_review_status,
-                            "outreach_channel": bulk_channel,
-                        })
-                        dispatched += 1
-                    except Exception:  # noqa: BLE001
-                        failed_lines.append(line)
-                st.success(f"Dispatched {dispatched} creator(s) — check 'Add Manual Creator' runs in "
-                           f"the Actions tab.")
-                if failed_lines:
-                    st.error(f"{len(failed_lines)} line(s) couldn't be parsed or dispatched: "
-                             + "; ".join(failed_lines))
 
 # =============================================================================
 # TAB 3 — Email (Sequences)
