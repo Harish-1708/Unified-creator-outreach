@@ -55,6 +55,8 @@ with col_refresh:
         st.cache_resource.clear()
         st.rerun()
 
+st.page_link("pages/creator_research.py", label="← Back to Creator Research", icon="🔎")
+
 try:
     connector = _get_discovery_connector()
     shortlist_records = connector.get_all_records_from_tab("Shortlist")
