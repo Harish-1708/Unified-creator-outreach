@@ -68,9 +68,20 @@ LEAD_DATA_VIEWS = ["Master", "Shortlisted", "Email", "DM", "Response", "Final"]
 # Applied to every view EXCEPT "Master" — Master stays full-width (every
 # raw column) since that's the actual review surface; these five are
 # meant to be quick, glanceable status checks, not another full spreadsheet.
+def reorder_priority_columns(row: Dict, priority_columns: List[str]) -> Dict:
+    """Pure — moves priority_columns (in the order given) to the front of
+    the dict, keeping everything else in its existing relative order
+    after them. Used for the Master tab's full-width display, where
+    contact_email otherwise sits wherever MASTER_HEADERS happens to place
+    it (in practice, buried well after username, not next to it)."""
+    reordered = {col: row[col] for col in priority_columns if col in row}
+    reordered.update({k: v for k, v in row.items() if k not in priority_columns})
+    return reordered
+
+
 CURATED_LEAD_COLUMNS = [
-    "dedup_key", "username", "platform", "Stage", "overall_fit",
-    "review_status", "outreach_channel", "contact_email",
+    "dedup_key", "username", "contact_email", "platform", "Stage", "overall_fit",
+    "review_status", "outreach_channel",
     "campaign_push_status", "outreach_record_id", "dm_status", "content_angle",
 ]
 
