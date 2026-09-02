@@ -31,5 +31,7 @@ WORKFLOW_SYNC_SHORTLIST = "sync_shortlist.yml"
 WORKFLOW_PUSH_TO_CAMPAIGN = "push_to_campaign.yml"
 WORKFLOW_DISCOVER = "discover.yml"
 WORKFLOW_PROMOTE_EXCLUDED = "promote_excluded_creator.yml"
+WORKFLOW_EDIT_MASTER_ROW = "edit_master_row.yml"
+WORKFLOW_DELETE_MASTER_CREATOR = "delete_master_creator.yml"
 
 EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH = os.path.join(REPO_ROOT, "config", "email_account_slots.yaml")
