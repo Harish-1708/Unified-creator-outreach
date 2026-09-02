@@ -62,7 +62,7 @@ def campaign_summary(run_log_records: List[Dict], campaign: str) -> Dict[str, in
     }
 
 
-LEAD_DATA_VIEWS = ["Main", "Shortlisted", "Email", "DM", "Response", "Final"]
+LEAD_DATA_VIEWS = ["Master", "Shortlisted", "Email", "DM", "Response", "Final"]
 
 
 def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
@@ -75,11 +75,13 @@ def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
     on it, updated the instant a decision is saved, with no dependency on
     a separate Sync Shortlist step having run yet.
 
-    Main         — every row, including ones nobody has reviewed yet.
-                    This is the review queue.
-    Shortlisted  — review_status == Approved specifically (no longer an
-                    alias for "everything", now that Main can include
-                    pending/rejected rows too).
+    Master       — every row, including ones nobody has reviewed yet.
+                    This is the review queue. (Named to match this
+                    pipeline's own Master tab — "Excluded" is a genuinely
+                    separate sheet tab, rendered as its own tab directly
+                    on the page rather than through this function, since
+                    it isn't a filter of Master rows at all.)
+    Shortlisted  — review_status == Approved specifically.
     Email        — outreach_channel == email.
     DM           — outreach_channel == dm.
     Response     — has a recorded DM outcome (dm_status set to something
@@ -92,7 +94,7 @@ def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
                     and defines its own status vocabulary — not guessed at
                     here ahead of that.)
     """
-    if view == "Main":
+    if view == "Master":
         return list(master_records)
     if view == "Shortlisted":
         return [r for r in master_records if r.get("review_status", "").strip().lower() == "approved"]
