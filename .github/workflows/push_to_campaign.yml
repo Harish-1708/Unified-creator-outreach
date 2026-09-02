@@ -35,18 +35,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - name: Write service account file
-        run: echo "$GCP_SA_KEY" > service_account.json
-        env:
-          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       - name: Push approved creators to campaign
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          # Raw JSON key text, not a file path — see run_push.py's own
+          # docstring for exactly why this has to match outreach.py's
+          # convention, not discover.py's.
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           OUTREACH_CAMPAIGN: ${{ github.event.inputs.outreach_campaign }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           CREATOR_KEYS: ${{ github.event.inputs.creator_keys }}
         run: python ../bridge/run_push.py
-      - name: Clean up service account file
-        if: always()
-        run: rm -f service_account.json
