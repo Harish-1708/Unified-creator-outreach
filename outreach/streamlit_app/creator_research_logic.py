@@ -65,6 +65,24 @@ def campaign_summary(run_log_records: List[Dict], campaign: str) -> Dict[str, in
 
 LEAD_DATA_VIEWS = ["Master", "Shortlisted", "Email", "DM", "Response", "Final"]
 
+# Applied to every view EXCEPT "Master" — Master stays full-width (every
+# raw column) since that's the actual review surface; these five are
+# meant to be quick, glanceable status checks, not another full spreadsheet.
+CURATED_LEAD_COLUMNS = [
+    "dedup_key", "username", "platform", "Stage", "overall_fit",
+    "review_status", "outreach_channel", "contact_email",
+    "campaign_push_status", "outreach_record_id", "dm_status", "content_angle",
+]
+
+
+def curate_row(row: Dict) -> Dict:
+    """Pure — returns only the curated columns that actually exist on
+    this row, in the defined order. Never raises for a missing column
+    (Shortlist and Master don't have an identical column set — dm_status
+    is Shortlist-only, for instance), and never invents a value for one
+    that isn't there."""
+    return {col: row[col] for col in CURATED_LEAD_COLUMNS if col in row}
+
 
 def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
     """One function for every 'Lead Data' tab — same underlying MASTER
