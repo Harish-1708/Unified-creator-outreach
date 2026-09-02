@@ -135,7 +135,20 @@ except Exception as exc:  # noqa: BLE001
     st.error(f"Couldn't read the Master tab: {exc}")
     st.stop()
 
+try:
+    shortlist_records_for_stage = connector.get_all_records_from_tab("Shortlist")
+except Exception:  # noqa: BLE001
+    # Shortlist tab may not exist yet on a brand-new sheet — stage
+    # computation degrades gracefully (email/dm rows just show as
+    # "not yet synced/pushed" / "draft pending", which is accurate).
+    shortlist_records_for_stage = []
+
+shortlist_index = crl.index_shortlist_by_key(shortlist_records_for_stage)
+
 campaign_rows = [r for r in master_records if r.get("Campaign") == campaign]
+for r in campaign_rows:
+    shortlist_row = shortlist_index.get((r.get("dedup_key"), r.get("Campaign", "")))
+    r["Stage"] = crl.compute_lifecycle_stage(r, shortlist_row)
 
 tabs = st.tabs(crl.LEAD_DATA_VIEWS)
 for tab, view in zip(tabs, crl.LEAD_DATA_VIEWS):
@@ -144,16 +157,25 @@ for tab, view in zip(tabs, crl.LEAD_DATA_VIEWS):
         if not rows:
             st.caption(f"No rows in '{view}' for this campaign yet.")
         else:
-            st.dataframe(rows, use_container_width=True)
+            # Stage first — the single most useful column to see without
+            # scrolling, given everything else on this row.
+            display_rows = [
+                {"Stage": r.get("Stage", ""), **{k: v for k, v in r.items() if k != "Stage"}}
+                for r in rows
+            ]
+            st.dataframe(display_rows, use_container_width=True)
 
 st.divider()
 
 # =============================================================================
-# Review a creator — writes review_status/outreach_channel onto Master,
-# via the "Update Review Decision" workflow. Streamlit never writes to the
-# sheet directly, matching every other write action in this app.
+# Review creators — writes review_status/outreach_channel onto Master, via
+# the "Update Review Decision" workflow. Streamlit never writes to the
+# sheet directly, matching every other write action in this app. Supports
+# selecting several creators at once and applying the same decision to
+# all of them in one dispatch — the workflow itself already isolates each
+# one, so a typo'd key in the middle of a big batch doesn't lose the rest.
 # =============================================================================
-st.subheader("Review a Creator")
+st.subheader("Review Creators")
 
 pending_rows = crl.filter_creator_rows(campaign_rows, "Main")
 review_options = [r["dedup_key"] for r in pending_rows if r.get("dedup_key")]
@@ -161,29 +183,42 @@ review_options = [r["dedup_key"] for r in pending_rows if r.get("dedup_key")]
 if not review_options:
     st.caption("No creators found for this campaign yet.")
 else:
-    selected_key = st.selectbox("Creator", review_options, key="review_creator_select")
-    selected_row = next((r for r in pending_rows if r["dedup_key"] == selected_key), {})
+    selected_keys = st.multiselect("Creators (select one or several)", review_options,
+                                    key="review_creator_multiselect")
 
-    with st.expander("Evidence", expanded=True):
-        st.write(f"**Overall fit:** {selected_row.get('overall_fit', '—')}")
-        st.write(f"**Fit explanation:** {selected_row.get('fit_explanation', '—')}")
-        st.write(f"**Content angle:** {selected_row.get('content_angle', '—')}")
-        if selected_row.get("recent_post_captions"):
-            st.write(f"**Recent captions:** {selected_row['recent_post_captions']}")
-        if selected_row.get("dr_concerns"):
-            st.warning(f"**Concerns:** {selected_row['dr_concerns']}")
-        st.write(f"**Current review status:** {selected_row.get('review_status') or '(pending)'}")
-        st.write(f"**Current outreach channel:** {selected_row.get('outreach_channel') or '(none)'}")
+    if not selected_keys:
+        st.caption("Select at least one creator to review.")
+    elif len(selected_keys) == 1:
+        selected_row = next((r for r in pending_rows if r["dedup_key"] == selected_keys[0]), {})
+        with st.expander("Evidence", expanded=True):
+            st.write(f"**Overall fit:** {selected_row.get('overall_fit', '—')}")
+            st.write(f"**Fit explanation:** {selected_row.get('fit_explanation', '—')}")
+            st.write(f"**Content angle:** {selected_row.get('content_angle', '—')}")
+            if selected_row.get("recent_post_captions"):
+                st.write(f"**Recent captions:** {selected_row['recent_post_captions']}")
+            if selected_row.get("dr_concerns"):
+                st.warning(f"**Concerns:** {selected_row['dr_concerns']}")
+            st.write(f"**Current review status:** {selected_row.get('review_status') or '(pending)'}")
+            st.write(f"**Current outreach channel:** {selected_row.get('outreach_channel') or '(none)'}")
+    else:
+        st.caption(f"{len(selected_keys)} creators selected — the same decision below will be "
+                   f"applied to all of them:")
+        with st.expander("Selected creators"):
+            for key in selected_keys:
+                row = next((r for r in pending_rows if r["dedup_key"] == key), {})
+                st.write(f"- **{key}** — currently {row.get('review_status') or 'pending'}, "
+                         f"channel: {row.get('outreach_channel') or 'none'}")
 
     new_review_status = st.radio("Review status", ["Approved", "Rejected", "Pending"],
                                   key="review_status_radio")
     new_channel = st.radio("Outreach channel", ["email", "dm", "none"], key="review_channel_radio")
 
-    if st.button("Save Decision", type="primary", key="save_review_decision"):
+    button_label = f"Save Decision for {len(selected_keys)} creator(s)" if selected_keys else "Save Decision"
+    if st.button(button_label, type="primary", key="save_review_decision", disabled=not selected_keys):
         try:
             client = _get_github_client()
             client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
-                "creator_key": selected_key,
+                "creator_key": ",".join(selected_keys),
                 "campaign": campaign,
                 "review_status": new_review_status,
                 "outreach_channel": new_channel,
