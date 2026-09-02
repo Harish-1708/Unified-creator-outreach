@@ -403,3 +403,63 @@ def test_delete_secret_raises_on_other_failure(monkeypatch):
     monkeypatch.setattr(github_client.requests, "delete", lambda *a, **kw: _fake_response(403, text="Forbidden"))
     with pytest.raises(GitHubActionsError, match="Failed to delete secret"):
         _client().delete_secret("EMAIL_ACCOUNT_SLOT_3")
+
+
+# ---------- set_variable ----------
+
+def test_set_variable_updates_via_patch_when_already_exists(monkeypatch):
+    calls = {}
+
+    def _fake_get(url, headers=None, timeout=None):
+        return _fake_response(200, {"name": "DEEP_RESEARCH_REPORT", "value": "old"})
+
+    def _fake_patch(url, json=None, headers=None, timeout=None):
+        calls["method"] = "patch"
+        calls["url"] = url
+        calls["json"] = json
+        return _fake_response(204)
+
+    def _fail_if_post_called(*a, **kw):
+        raise AssertionError("must not POST (create) when the variable already exists")
+
+    monkeypatch.setattr(github_client.requests, "get", _fake_get)
+    monkeypatch.setattr(github_client.requests, "patch", _fake_patch)
+    monkeypatch.setattr(github_client.requests, "post", _fail_if_post_called)
+
+    _client().set_variable("DEEP_RESEARCH_REPORT", "new value")
+
+    assert calls["method"] == "patch"
+    assert calls["json"] == {"name": "DEEP_RESEARCH_REPORT", "value": "new value"}
+    assert calls["url"].endswith("/actions/variables/DEEP_RESEARCH_REPORT")
+
+
+def test_set_variable_creates_via_post_when_missing(monkeypatch):
+    calls = {}
+
+    def _fake_get(url, headers=None, timeout=None):
+        return _fake_response(404)
+
+    def _fake_post(url, json=None, headers=None, timeout=None):
+        calls["method"] = "post"
+        calls["json"] = json
+        return _fake_response(201)
+
+    def _fail_if_patch_called(*a, **kw):
+        raise AssertionError("must not PATCH (update) when the variable doesn't exist yet")
+
+    monkeypatch.setattr(github_client.requests, "get", _fake_get)
+    monkeypatch.setattr(github_client.requests, "post", _fake_post)
+    monkeypatch.setattr(github_client.requests, "patch", _fail_if_patch_called)
+
+    _client().set_variable("DEEP_RESEARCH_REPORT", "first value")
+
+    assert calls["method"] == "post"
+    assert calls["json"] == {"name": "DEEP_RESEARCH_REPORT", "value": "first value"}
+
+
+def test_set_variable_raises_on_failure(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(404))
+    monkeypatch.setattr(github_client.requests, "post", lambda *a, **kw: _fake_response(422, text="Bad Request"))
+
+    with pytest.raises(GitHubActionsError):
+        _client().set_variable("BAD_NAME", "value")
