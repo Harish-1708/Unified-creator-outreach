@@ -51,11 +51,11 @@ def _master_row(dedup_key, outreach_channel="", review_status="", dm_status=""):
             "review_status": review_status, "dm_status": dm_status}
 
 
-def test_main_view_returns_every_row_including_unreviewed():
+def test_master_view_returns_every_row_including_unreviewed():
     """The bug this replaces: Main must show pending rows too, not just
     already-approved ones — that's the whole point of a review queue."""
     rows = [_master_row("a", review_status=""), _master_row("b", review_status="Approved")]
-    assert crl.filter_creator_rows(rows, "Main") == rows
+    assert crl.filter_creator_rows(rows, "Master") == rows
 
 
 def test_shortlisted_view_filters_to_approved_only():
