@@ -146,133 +146,140 @@ if HAS_DISCOVERY:
         excluded_records = []
 
     all_settings_top = crl.load_current_settings()
-
-    col_search, col_add_brand, col_add_campaign, col_refresh = st.columns([3, 1, 1, 1])
-    with col_search:
-        brand_search = st.text_input("🔍 Search brands", key="workspace_brand_search")
-    with col_add_brand:
-        st.write("")
-        if st.button("➕ Add Brand"):
-            st.session_state["workspace_show_add_brand"] = True
-    with col_add_campaign:
-        st.write("")
-        if st.button("➕ Add Campaign"):
-            st.session_state["workspace_show_add_campaign"] = True
-    with col_refresh:
-        st.write("")
-        if st.button("🔄 Refresh"):
-            st.cache_resource.clear()
-            st.cache_data.clear()
-            st.rerun()
-
-    all_brands = crl.list_all_brands_combined(discovery_run_log, all_settings_top)
-
-    if st.session_state.get("workspace_show_add_brand"):
-        with st.form("workspace_add_brand_form"):
-            st.subheader("Add Brand")
-            new_brand_name = st.text_input("Brand name")
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                submitted = st.form_submit_button("Save", type="primary")
-            with col_cancel:
-                cancelled = st.form_submit_button("Cancel")
-            if cancelled:
-                st.session_state["workspace_show_add_brand"] = False
-                st.rerun()
-            if submitted:
-                if not new_brand_name.strip():
-                    st.error("Brand name can't be blank.")
-                else:
-                    try:
-                        registry = crl.load_brand_registry()
-                        commit = crl.build_add_brand_commit(registry, new_brand_name.strip())
-                        _get_github_client().commit_campaign_files_directly(
-                            files=[{"path": commit["path"], "content": commit["content"]}],
-                            commit_message=commit["commit_message"])
-                        st.success(f"Brand '{new_brand_name.strip()}' added. It'll appear below once "
-                                   "the app finishes redeploying.")
-                        st.session_state["workspace_show_add_brand"] = False
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't add brand: {exc}")
-
-    if st.session_state.get("workspace_show_add_campaign"):
-        with st.form("workspace_add_campaign_form"):
-            st.subheader("Add Campaign")
-            if not all_brands:
-                st.caption("No brands exist yet — add one first.")
-            else:
-                campaign_brand = st.selectbox("Brand", all_brands, key="workspace_new_campaign_brand")
-                new_campaign_name = st.text_input("New campaign name")
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                submitted = st.form_submit_button("Save", type="primary")
-            with col_cancel:
-                cancelled = st.form_submit_button("Cancel")
-            if cancelled:
-                st.session_state["workspace_show_add_campaign"] = False
-                st.rerun()
-            if submitted and all_brands:
-                if not new_campaign_name.strip():
-                    st.error("Campaign name can't be blank.")
-                else:
-                    try:
-                        commit = crl.build_add_campaign_commit(all_settings_top, new_campaign_name.strip(),
-                                                                campaign_brand)
-                        _get_github_client().commit_campaign_files_directly(
-                            files=[{"path": commit["path"], "content": commit["content"]}],
-                            commit_message=commit["commit_message"])
-                        st.success(f"Campaign '{new_campaign_name.strip()}' created under '{campaign_brand}'. "
-                                   "It'll appear below once the app finishes redeploying.")
-                        st.session_state["workspace_show_add_campaign"] = False
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't add campaign: {exc}")
-
-    st.divider()
-
-    visible_brands = [b for b in all_brands if brand_search.strip().lower() in b.lower()] \
-        if brand_search.strip() else all_brands
-
-    if not visible_brands:
-        st.info("No brands found yet." if not all_brands else f"No brand matches '{brand_search}'.")
-    else:
-        for b in visible_brands:
-            with st.expander(b, expanded=(b == st.session_state.get("workspace_selected_brand"))):
-                campaigns_for_this_brand = crl.list_all_campaigns_for_brand_combined(
-                    discovery_run_log, b, all_settings_top)
-                if not campaigns_for_this_brand:
-                    st.caption("No campaigns yet for this brand.")
-                else:
-                    for camp in campaigns_for_this_brand:
-                        summary = crl.campaign_summary(discovery_run_log, camp)
-                        master_count = len([r for r in master_records if r.get("Campaign") == camp])
-                        excluded_count = len([r for r in excluded_records if r.get("Campaign") == camp])
-                        with st.container(border=True):
-                            c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
-                            c1.markdown(f"**{camp}**")
-                            c2.write(f"{summary['run_count']} run(s)")
-                            c3.write(f"{summary['total_found']} found")
-                            c4.write(f"{master_count} in Master")
-                            c5.write(f"{excluded_count} excluded")
-                            if st.button("Open →", key=f"workspace_open_campaign_{b}_{camp}"):
-                                st.session_state["workspace_selected_brand"] = b
-                                st.session_state["workspace_active_discovery_campaign"] = camp
-                                st.rerun()
-
     discovery_campaign = st.session_state.get("workspace_active_discovery_campaign")
-    if not discovery_campaign:
-        st.caption("No campaign selected yet — expand a brand above and click 'Use this campaign'.")
-        st.stop()
 
-if discovery_campaign:
-    col_back, col_title = st.columns([1, 5])
-    with col_back:
-        if st.button("← Back to Brands"):
-            st.session_state["workspace_active_discovery_campaign"] = None
-            st.rerun()
-    with col_title:
-        st.subheader(f"📍 {discovery_campaign}")
+    # Everything below — search, +Add Brand, +Add Campaign, the brand
+    # cards — is the BROWSER. It only renders when nothing is selected
+    # yet. Once a campaign IS active, this whole block is skipped
+    # entirely (not rendered-then-hidden — never reached at all), and
+    # st.stop() below guarantees the tabs section further down is never
+    # reached while still in browser mode. The bug this replaces: the
+    # browser used to render unconditionally, with the tabs appended
+    # below it whenever a campaign was active — showing both at once.
+    if not discovery_campaign:
+        col_search, col_add_brand, col_add_campaign, col_refresh = st.columns([3, 1, 1, 1])
+        with col_search:
+            brand_search = st.text_input("🔍 Search brands", key="workspace_brand_search")
+        with col_add_brand:
+            st.write("")
+            if st.button("➕ Add Brand"):
+                st.session_state["workspace_show_add_brand"] = True
+        with col_add_campaign:
+            st.write("")
+            if st.button("➕ Add Campaign"):
+                st.session_state["workspace_show_add_campaign"] = True
+        with col_refresh:
+            st.write("")
+            if st.button("🔄 Refresh"):
+                st.cache_resource.clear()
+                st.cache_data.clear()
+                st.rerun()
+
+        all_brands = crl.list_all_brands_combined(discovery_run_log, all_settings_top)
+
+        if st.session_state.get("workspace_show_add_brand"):
+            with st.form("workspace_add_brand_form"):
+                st.subheader("Add Brand")
+                new_brand_name = st.text_input("Brand name")
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    submitted = st.form_submit_button("Save", type="primary")
+                with col_cancel:
+                    cancelled = st.form_submit_button("Cancel")
+                if cancelled:
+                    st.session_state["workspace_show_add_brand"] = False
+                    st.rerun()
+                if submitted:
+                    if not new_brand_name.strip():
+                        st.error("Brand name can't be blank.")
+                    else:
+                        try:
+                            registry = crl.load_brand_registry()
+                            commit = crl.build_add_brand_commit(registry, new_brand_name.strip())
+                            _get_github_client().commit_campaign_files_directly(
+                                files=[{"path": commit["path"], "content": commit["content"]}],
+                                commit_message=commit["commit_message"])
+                            st.success(f"Brand '{new_brand_name.strip()}' added. It'll appear below once "
+                                       "the app finishes redeploying.")
+                            st.session_state["workspace_show_add_brand"] = False
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't add brand: {exc}")
+
+        if st.session_state.get("workspace_show_add_campaign"):
+            with st.form("workspace_add_campaign_form"):
+                st.subheader("Add Campaign")
+                if not all_brands:
+                    st.caption("No brands exist yet — add one first.")
+                else:
+                    campaign_brand = st.selectbox("Brand", all_brands, key="workspace_new_campaign_brand")
+                    new_campaign_name = st.text_input("New campaign name")
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    submitted = st.form_submit_button("Save", type="primary")
+                with col_cancel:
+                    cancelled = st.form_submit_button("Cancel")
+                if cancelled:
+                    st.session_state["workspace_show_add_campaign"] = False
+                    st.rerun()
+                if submitted and all_brands:
+                    if not new_campaign_name.strip():
+                        st.error("Campaign name can't be blank.")
+                    else:
+                        try:
+                            commit = crl.build_add_campaign_commit(all_settings_top, new_campaign_name.strip(),
+                                                                    campaign_brand)
+                            _get_github_client().commit_campaign_files_directly(
+                                files=[{"path": commit["path"], "content": commit["content"]}],
+                                commit_message=commit["commit_message"])
+                            st.success(f"Campaign '{new_campaign_name.strip()}' created under "
+                                       f"'{campaign_brand}'. It'll appear below once the app finishes "
+                                       f"redeploying.")
+                            st.session_state["workspace_show_add_campaign"] = False
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't add campaign: {exc}")
+
+        st.divider()
+
+        visible_brands = [b for b in all_brands if brand_search.strip().lower() in b.lower()] \
+            if brand_search.strip() else all_brands
+
+        if not visible_brands:
+            st.info("No brands found yet." if not all_brands else f"No brand matches '{brand_search}'.")
+        else:
+            for b in visible_brands:
+                with st.expander(b, expanded=(b == st.session_state.get("workspace_selected_brand"))):
+                    campaigns_for_this_brand = crl.list_all_campaigns_for_brand_combined(
+                        discovery_run_log, b, all_settings_top)
+                    if not campaigns_for_this_brand:
+                        st.caption("No campaigns yet for this brand.")
+                    else:
+                        for camp in campaigns_for_this_brand:
+                            summary = crl.campaign_summary(discovery_run_log, camp)
+                            master_count = len([r for r in master_records if r.get("Campaign") == camp])
+                            excluded_count = len([r for r in excluded_records if r.get("Campaign") == camp])
+                            with st.container(border=True):
+                                c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                                c1.markdown(f"**{camp}**")
+                                c2.write(f"{summary['run_count']} run(s)")
+                                c3.write(f"{summary['total_found']} found")
+                                c4.write(f"{master_count} in Master")
+                                c5.write(f"{excluded_count} excluded")
+                                if st.button("Open →", key=f"workspace_open_campaign_{b}_{camp}"):
+                                    st.session_state["workspace_selected_brand"] = b
+                                    st.session_state["workspace_active_discovery_campaign"] = camp
+                                    st.rerun()
+
+        st.stop()  # browser mode ends here — the tabs section below is never reached
+
+col_back, col_title = st.columns([1, 5])
+with col_back:
+    if st.button("← Back to Brands"):
+        st.session_state["workspace_active_discovery_campaign"] = None
+        st.rerun()
+with col_title:
+    st.title(discovery_campaign)
 
 tab_names = ["🔎 Creator Research", "🗂️ Campaigns", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
