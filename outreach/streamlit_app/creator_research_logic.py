@@ -217,6 +217,67 @@ def sanitize_to_outreach_campaign_name(discovery_campaign: str) -> str:
     return sanitized.strip("_") or "Campaign"
 
 
+def build_campaign_analytics(run_log_records: List[Dict], master_records: List[Dict]) -> List[Dict]:
+    """Pure — one summary row per (brand, campaign) pair found in Run Log,
+    with creator counts pulled from Master. A campaign with real Run Log
+    history but zero Master rows yet (a run that found nothing, or hasn't
+    finished) still gets a row — showing 0s is more honest than silently
+    omitting it."""
+    seen = {}
+    for r in run_log_records:
+        brand = r.get("brand_name", "")
+        campaign = r.get("campaign", "")
+        if not campaign:
+            continue
+        key = (brand, campaign)
+        if key not in seen:
+            seen[key] = {"brand": brand, "campaign": campaign, "runs": 0,
+                         "total_found": 0, "total_after_filters": 0}
+        seen[key]["runs"] += 1
+        for field, out_key in (("total_found", "total_found"), ("total_after_filters", "total_after_filters")):
+            try:
+                seen[key][out_key] += int(r.get(field) or 0)
+            except (TypeError, ValueError):
+                continue
+
+    campaign_master_rows: Dict[str, List[Dict]] = {}
+    for row in master_records:
+        campaign_master_rows.setdefault(row.get("Campaign", ""), []).append(row)
+
+    results = []
+    for (brand, campaign), summary in seen.items():
+        rows = campaign_master_rows.get(campaign, [])
+        approved = sum(1 for r in rows if r.get("review_status", "").strip().lower() == "approved")
+        rejected = sum(1 for r in rows if r.get("review_status", "").strip().lower() == "rejected")
+        pending = sum(1 for r in rows if r.get("review_status", "").strip().lower() not in ("approved", "rejected"))
+        email_count = sum(1 for r in rows if r.get("outreach_channel", "").strip().lower() == "email")
+        dm_count = sum(1 for r in rows if r.get("outreach_channel", "").strip().lower() == "dm")
+        results.append({
+            "Brand": brand, "Campaign": campaign, "Runs": summary["runs"],
+            "Found (all runs)": summary["total_found"], "Written to Master": summary["total_after_filters"],
+            "In Master now": len(rows), "Approved": approved, "Rejected": rejected, "Pending": pending,
+            "Email": email_count, "DM": dm_count,
+        })
+    return sorted(results, key=lambda r: (r["Brand"], r["Campaign"]))
+
+
+def build_analytics_totals(campaign_rows: List[Dict]) -> Dict[str, int]:
+    """Pure — sums build_campaign_analytics' own output across every
+    campaign, for the headline metrics at the top of the Analytics page."""
+    totals = {"brands": len({r["Brand"] for r in campaign_rows if r["Brand"]}),
+              "campaigns": len(campaign_rows), "runs": 0, "in_master": 0,
+              "approved": 0, "rejected": 0, "pending": 0, "email": 0, "dm": 0}
+    for r in campaign_rows:
+        totals["runs"] += r["Runs"]
+        totals["in_master"] += r["In Master now"]
+        totals["approved"] += r["Approved"]
+        totals["rejected"] += r["Rejected"]
+        totals["pending"] += r["Pending"]
+        totals["email"] += r["Email"]
+        totals["dm"] += r["DM"]
+    return totals
+
+
 def get_asana_sync_status(all_settings: Dict, campaign: str) -> bool:
     """Thin pass-through to campaign_settings — kept here too so pages
     only ever import creator_research_logic, not both modules directly."""
