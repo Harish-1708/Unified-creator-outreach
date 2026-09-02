@@ -68,6 +68,36 @@ def with_backoff(fn, *args, **kwargs):
     raise RuntimeError(f"Exceeded {MAX_RETRIES} retries writing to Google Sheets") from last_error
 
 
+def ensure_tab_headers(ws, required_headers: list) -> list:
+    """Ported from discover.py's function of the same name (kept as a
+    separate copy here rather than an import, per this repo's own
+    self-contained-files philosophy) — appends any header the sheet is
+    missing, WITHOUT reordering or touching existing columns, so existing
+    data never shifts. This is the safeguard the Shortlist tab never had:
+    every time SECTOR_HEADERS has grown (13 columns added across this
+    build — Campaign, review_status, the dr_* fields, the four bridge
+    columns), a brand-new Shortlist tab picked them up automatically, but
+    an ALREADY-EXISTING one never did, because the header row was only
+    ever written once, at tab-creation time. The data itself was never
+    misaligned — every row has always been built from the CURRENT,
+    complete SECTOR_HEADERS in order — only the header labels were stale.
+    Calling this here means an existing tab now self-heals on every run,
+    the same way Master and Excluded already do."""
+    actual = with_backoff(ws.row_values, 1)
+    if not actual:
+        with_backoff(ws.append_row, required_headers)
+        return list(required_headers)
+    missing = [h for h in required_headers if h not in actual]
+    if missing:
+        start_col = len(actual) + 1
+        start_a1 = gspread.utils.rowcol_to_a1(1, start_col)
+        with_backoff(ws.update, start_a1, [missing])
+        actual = actual + missing
+        print(f"[shortlist] Added {len(missing)} missing column(s) to 'Shortlist' without moving "
+              f"existing data: {', '.join(missing)}")
+    return actual
+
+
 def sync_shortlist():
     creds = Credentials.from_service_account_file(
         os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"], scopes=SHEETS_SCOPES
@@ -81,6 +111,7 @@ def sync_shortlist():
     except gspread.WorksheetNotFound:
         shortlist_tab = sheet.add_worksheet(title="Shortlist", rows=500, cols=len(SHORTLIST_HEADERS) + 2)
         with_backoff(shortlist_tab.append_row, SHORTLIST_HEADERS)
+    ensure_tab_headers(shortlist_tab, SHORTLIST_HEADERS)
 
     master_records = with_backoff(master.get_all_records)
     # (dedup_key, Campaign), not dedup_key alone — the same account can be
