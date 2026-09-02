@@ -355,11 +355,177 @@ with tabs[0]:
         else:
             st.caption("No excluded rows for this campaign yet.")
 
-    st.caption(
-        "To run a NEW discovery pass or add more data to this campaign, trigger the "
-        "'Creator Discovery Pipeline' workflow from the Actions tab with this Campaign name "
-        "— running discovery directly from this page isn't built yet."
-    )
+    st.divider()
+
+    # =========================================================================
+    # Run New Research — dispatches the real discover.yml, using its exact
+    # current input schema (verified against the actual file, not guessed).
+    # campaign is locked to the campaign already open on this page — a new
+    # run here always adds to THIS campaign, matching how every other
+    # action on this page already scopes to the currently open campaign.
+    # =========================================================================
+    st.subheader("▶ Run New Research")
+
+    run_state_key = f"workspace_discover_run_{discovery_campaign}"
+
+    with st.form("workspace_run_discovery_form"):
+        st.caption(f"Campaign: **{discovery_campaign}** (this run adds to it)")
+        default_brand = st.session_state.get("workspace_selected_brand", "")
+        brand_name_input = st.text_input("Brand name", value=default_brand,
+                                          key="workspace_discover_brand_name")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            niche_input = st.text_input("Niche (e.g. loungewear)", key="workspace_discover_niche")
+            location_input = st.text_input("Location (city/country)", key="workspace_discover_location")
+            platform_input = st.selectbox("Platform", ["both", "instagram", "tiktok"],
+                                           key="workspace_discover_platform")
+        with c2:
+            target_gender_input = st.selectbox("Target gender", ["both", "male", "female"],
+                                                key="workspace_discover_target_gender")
+            result_limit_input = st.number_input("Result limit (qualified creators, 1-60)",
+                                                   min_value=1, max_value=60, value=5,
+                                                   key="workspace_discover_result_limit")
+
+        brand_website_input = st.text_input("Brand website (optional)", key="workspace_discover_website")
+        brand_brief_input = st.text_area("Brand brief (optional but high-value — what it is, who buys "
+                                          "it, when it's used)", key="workspace_discover_brief", height=100)
+
+        with st.expander("Advanced options"):
+            target_buyer_input = st.text_input(
+                "Target buyer (optional, if different from the creator's audience)",
+                key="workspace_discover_target_buyer")
+            use_cases_input = st.text_input("Use cases (optional, e.g. 'gym, shower, beach, travel')",
+                                             key="workspace_discover_use_cases")
+            creator_types_input = st.text_input(
+                "Creator types to prioritize (optional, e.g. 'fitness dads, men's lifestyle')",
+                key="workspace_discover_creator_types")
+            exclude_input = st.text_input(
+                "Exclude (optional, e.g. 'children's apparel, lingerie, retailers')",
+                key="workspace_discover_exclude")
+            competitor_brands_input = st.text_input("Competitor brands (comma-separated, optional)",
+                                                      key="workspace_discover_competitors")
+
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                search_budget_input = st.text_input("Search budget (optional, auto-scaled if blank)",
+                                                      key="workspace_discover_search_budget")
+                min_followers_input = st.text_input("Min followers (optional, e.g. 50k)",
+                                                      key="workspace_discover_min_followers")
+                min_overall_fit_input = st.number_input("Min overall fit (0-10)", min_value=0, max_value=10,
+                                                          value=5, key="workspace_discover_min_fit")
+                creator_size_tier_input = st.selectbox(
+                    "Creator size tier (optional — overrides min/max followers)",
+                    ["", "emerging", "mid", "large", "mega"], key="workspace_discover_size_tier")
+            with ac2:
+                llm_candidate_limit_input = st.text_input("LLM candidate limit (optional, auto if blank)",
+                                                            key="workspace_discover_llm_limit")
+                max_followers_input = st.text_input("Max followers (optional, e.g. 5 lakh)",
+                                                      key="workspace_discover_max_followers")
+                unknown_followers_policy_input = st.selectbox(
+                    "Unknown followers policy", ["needs_verification", "include"],
+                    key="workspace_discover_unknown_followers")
+
+            require_activity_verified_input = st.checkbox(
+                "Require verified recent-post date (leave off for Serper-only enrichment)",
+                key="workspace_discover_require_activity")
+            sonnet_refinement_input = st.checkbox(
+                "Sonnet refinement (more critical second pass — costs more per run)",
+                key="workspace_discover_sonnet_refinement")
+            weight_overrides_input = st.text_input(
+                "Fit weight overrides (optional, e.g. 'product_fit=0.4,audience=0.2')",
+                key="workspace_discover_weight_overrides")
+            search_vocabulary_input = st.text_area(
+                "Search vocabulary (optional — your own terms/hashtags/archetypes; leave blank to let "
+                "Claude expand it)", key="workspace_discover_search_vocab", height=80)
+
+        run_submitted = st.form_submit_button("🚀 Run Research", type="primary")
+
+    if run_submitted:
+        missing_required = [name for name, val in {
+            "Brand name": brand_name_input, "Niche": niche_input, "Location": location_input,
+        }.items() if not val.strip()]
+        if missing_required:
+            st.error(f"Required: {', '.join(missing_required)}")
+        else:
+            try:
+                client = _get_github_client()
+                run_details = client.dispatch_workflow(config.WORKFLOW_DISCOVER, {
+                    "campaign": discovery_campaign,
+                    "niche": niche_input,
+                    "brand_name": brand_name_input,
+                    "brand_website": brand_website_input,
+                    "brand_brief": brand_brief_input,
+                    "target_buyer": target_buyer_input,
+                    "use_cases": use_cases_input,
+                    "creator_types": creator_types_input,
+                    "exclude": exclude_input,
+                    "location": location_input,
+                    "platform": platform_input,
+                    "target_gender": target_gender_input,
+                    "result_limit": str(result_limit_input),
+                    "search_budget": search_budget_input,
+                    "llm_candidate_limit": llm_candidate_limit_input,
+                    "min_followers": min_followers_input,
+                    "max_followers": max_followers_input,
+                    "unknown_followers_policy": unknown_followers_policy_input,
+                    "min_overall_fit": str(min_overall_fit_input),
+                    "require_activity_verified": "true" if require_activity_verified_input else "false",
+                    "sonnet_refinement": "true" if sonnet_refinement_input else "false",
+                    "competitor_brands": competitor_brands_input,
+                    "weight_overrides": weight_overrides_input,
+                    "search_vocabulary": search_vocabulary_input,
+                    "creator_size_tier": creator_size_tier_input,
+                })
+                if run_details is None:
+                    time.sleep(2)
+                    run_details = client.find_recent_run(config.WORKFLOW_DISCOVER)
+                st.session_state[run_state_key] = {
+                    "run_id": (run_details or {}).get("id") or (run_details or {}).get("run_id"),
+                    "run_url": (run_details or {}).get("html_url", ""),
+                    "started_at": time.time(),
+                }
+                st.success(f"Dispatched — running discovery for '{discovery_campaign}'.")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Couldn't dispatch: {exc}")
+
+    # ---------- Live status ----------
+    run_info = st.session_state.get(run_state_key)
+    if run_info:
+        st.divider()
+        elapsed_seconds = int(time.time() - run_info["started_at"])
+        elapsed_display = f"{elapsed_seconds // 60}m {elapsed_seconds % 60}s"
+
+        status_text, conclusion = "unknown", None
+        if run_info.get("run_id"):
+            try:
+                run = _get_github_client().get_run(run_info["run_id"])
+                status_text = run.get("status", "unknown")
+                conclusion = run.get("conclusion")
+            except Exception:  # noqa: BLE001
+                pass
+
+        if status_text == "completed":
+            icon = "✅" if conclusion == "success" else "❌"
+            st.write(f"{icon} **Completed** — conclusion: {conclusion}. Took {elapsed_display}.")
+            st.caption("Refresh the page (or click Refresh at the top) to see the new Master/Excluded rows.")
+        else:
+            st.write(f"🟢 **Running** — status: {status_text}. Elapsed: {elapsed_display}.")
+            st.caption("Typical runs take ~15-30 minutes depending on result_limit and search_budget — "
+                       "there's no per-step progress signal available, only overall run status.")
+
+        col_refresh_run, col_clear_run, col_link = st.columns([1, 1, 2])
+        with col_refresh_run:
+            if st.button("🔄 Refresh Status", key="workspace_refresh_discover_run"):
+                st.rerun()
+        with col_clear_run:
+            if st.button("✕ Dismiss", key="workspace_dismiss_discover_run"):
+                del st.session_state[run_state_key]
+                st.rerun()
+        with col_link:
+            if run_info.get("run_url"):
+                st.markdown(f"[View full log in Actions]({run_info['run_url']})")
 
 # =============================================================================
 # TAB 2 — Campaigns (Master | Excluded | Shortlist | Email | DM | Response
