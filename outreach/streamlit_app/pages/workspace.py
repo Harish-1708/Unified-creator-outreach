@@ -606,18 +606,63 @@ with tabs[1]:
                 # Direct in-table selection via a checkbox column,
                 # replacing the separate multiselect below the table —
                 # select rows right where you're already looking at them.
+                # Editing is enabled ONLY on a specific, deliberate set of
+                # display fields (see edit_master_row.py's own docstring
+                # for why dedup_key and every pipeline-computed field —
+                # scores, evidence — stay locked).
                 editable_rows = [{"Select": False, **crl.reorder_priority_columns(
                     r, ["dedup_key", "username", "contact_email"])} for r in rows]
                 data_columns = list(editable_rows[0].keys())
+                editable_field_names = {"contact_email", "username", "profile_link", "content_angle"}
                 edited_rows = st.data_editor(
                     editable_rows,
                     column_config={"Select": st.column_config.CheckboxColumn(required=True, pinned=True)},
-                    disabled=[c for c in data_columns if c != "Select"],
+                    disabled=[c for c in data_columns if c != "Select" and c not in editable_field_names],
                     hide_index=True,
                     use_container_width=True,
                     key="workspace_master_data_editor",
                 )
                 selected_keys = [r["dedup_key"] for r in edited_rows if r.get("Select") and r.get("dedup_key")]
+
+                changed_rows = []
+                original_by_key = {r.get("dedup_key"): r for r in rows}
+                for edited in edited_rows:
+                    key = edited.get("dedup_key")
+                    original = original_by_key.get(key)
+                    if not original or not key:
+                        continue
+                    diffs = {f: edited.get(f, "") for f in editable_field_names
+                             if str(edited.get(f, "")) != str(original.get(f, ""))}
+                    if diffs:
+                        changed_rows.append((key, diffs))
+
+                if changed_rows:
+                    st.divider()
+                    st.write(f"**{len(changed_rows)} row(s) edited:** "
+                             + ", ".join(k for k, _ in changed_rows))
+                    if st.button(f"💾 Save {len(changed_rows)} Edit(s)", type="primary",
+                                 key="workspace_save_master_edits"):
+                        client = _get_github_client()
+                        edit_failures = []
+                        for key, diffs in changed_rows:
+                            try:
+                                current_full = original_by_key[key]
+                                client.dispatch_workflow(config.WORKFLOW_EDIT_MASTER_ROW, {
+                                    "creator_key": key,
+                                    "campaign": discovery_campaign,
+                                    "contact_email": diffs.get("contact_email", current_full.get("contact_email", "")),
+                                    "username": diffs.get("username", current_full.get("username", "")),
+                                    "profile_link": diffs.get("profile_link", current_full.get("profile_link", "")),
+                                    "content_angle": diffs.get("content_angle", current_full.get("content_angle", "")),
+                                })
+                            except Exception:  # noqa: BLE001
+                                edit_failures.append(key)
+                        if edit_failures:
+                            st.error(f"Dispatched, but {len(edit_failures)} failed to send: "
+                                     + ", ".join(edit_failures))
+                        else:
+                            st.success(f"Dispatched {len(changed_rows)} edit(s) — check 'Edit Master "
+                                       f"Row' runs in the Actions tab.")
 
                 st.divider()
                 st.subheader("Actions for selected creator(s)")
@@ -710,7 +755,30 @@ with tabs[1]:
                         except Exception as exc:  # noqa: BLE001
                             st.error(f"Couldn't complete: {exc}")
 
+                st.divider()
+                st.subheader("🗑️ Delete Selected")
+                if not selected_keys:
+                    st.caption("Tick the Select column above on one or more rows to delete them.")
+                else:
+                    st.warning(f"Permanently removes {len(selected_keys)} creator(s) from Master AND "
+                               f"Shortlist (if synced there) — not recoverable from this app. Selected: "
+                               + ", ".join(selected_keys))
+                    confirm_delete = st.checkbox(
+                        f"I understand this permanently deletes {len(selected_keys)} creator(s)",
+                        key="workspace_confirm_delete_master")
+                    if st.button(f"Delete {len(selected_keys)} Creator(s)", disabled=not confirm_delete,
+                                 key="workspace_delete_master_button"):
+                        try:
+                            client = _get_github_client()
+                            client.dispatch_workflow(config.WORKFLOW_DELETE_MASTER_CREATOR, {
+                                "creator_key": ",".join(selected_keys),
+                                "campaign": discovery_campaign,
+                            })
+                            st.success("Dispatched — check 'Delete Master Creator' in the Actions tab.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't dispatch: {exc}")
 
+                st.divider()
                 st.subheader("+ Add Creator")
                 st.caption(
                     "For creators that never went through discovery — a referral, someone you already "
