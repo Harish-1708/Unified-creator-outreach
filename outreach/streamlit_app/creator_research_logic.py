@@ -11,7 +11,7 @@ both brand_name and campaign there.
 """
 import os
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Resolved from this file's own location, not the process's current working
 # directory — a bare relative path like "../discovery" only works if
@@ -108,6 +108,51 @@ def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
     if view == "Final":
         return [r for r in master_records if r.get("review_status", "").strip().lower() == "rejected"]
     raise ValueError(f"Unknown Lead Data view '{view}' — must be one of {LEAD_DATA_VIEWS}")
+
+
+def index_shortlist_by_key(shortlist_records: List[Dict]) -> Dict[tuple, Dict]:
+    """(dedup_key, Campaign) -> Shortlist row — same compound key every
+    other part of this pipeline uses. Lets compute_lifecycle_stage() look
+    up a creator's Shortlist state (if it's been synced there yet)
+    without re-scanning the whole list per creator."""
+    return {(r.get("dedup_key"), r.get("Campaign", "")): r for r in shortlist_records}
+
+
+def compute_lifecycle_stage(master_row: Dict, shortlist_row: Optional[Dict] = None) -> str:
+    """Derives one human-readable stage from data that already exists on
+    Master and (if the creator's been synced) Shortlist. Deliberately does
+    NOT reach into outreach.py's own Response Sheet — that's a different
+    spreadsheet, and pulling live email-reply state in here would mean
+    this function doing its own Sheets I/O rather than staying pure. Email
+    reply status stays visible on outreach.py's own Responses page, not
+    duplicated here.
+    """
+    review_status = (master_row.get("review_status") or "").strip().lower()
+    if not review_status or review_status == "pending":
+        return "Discovered"
+    if review_status == "rejected":
+        return "Rejected"
+
+    # From here on, review_status == "approved"
+    channel = (master_row.get("outreach_channel") or "").strip().lower()
+    if not channel or channel == "none":
+        return "Approved"
+
+    if channel == "email":
+        push_status = (shortlist_row or {}).get("campaign_push_status", "").strip().lower()
+        if push_status == "pushed":
+            return "Email — Pushed to Outreach"
+        if push_status == "failed":
+            return "Email — Push Failed"
+        return "Approved — Email (not yet synced/pushed)"
+
+    if channel == "dm":
+        dm_status = (shortlist_row or {}).get("dm_status", "").strip()
+        if not dm_status or dm_status == "pending_reasoning":
+            return "Approved — DM (draft pending)"
+        return f"DM — {dm_status}"
+
+    return "Approved"  # an outreach_channel value that isn't email/dm/none — unexpected, not fatal
 
 
 # ---------- Campaign Settings (Asana sync toggle) ----------
