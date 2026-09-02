@@ -459,6 +459,96 @@ with tabs[1]:
         else:
             st.caption("No creators routed to Email yet.")
 
+        st.divider()
+        st.subheader("+ Add Creator")
+        st.caption(
+            "For creators that never went through discovery — a referral, someone you already know "
+            "about. Adds directly to Master, same as a discovered row, just without any scores "
+            "(nothing scored it). Fails clearly rather than duplicating if this creator already "
+            "exists under this Campaign."
+        )
+        add_mode = st.radio("Mode", ["Single", "Bulk"], key="workspace_add_creator_mode", horizontal=True)
+
+        if add_mode == "Single":
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                new_platform = st.text_input("Platform", key="workspace_add_platform",
+                                              placeholder="instagram")
+                new_username = st.text_input("Username (no @)", key="workspace_add_username")
+                new_email = st.text_input("Contact email (optional)", key="workspace_add_email")
+            with ac2:
+                new_profile_link = st.text_input("Profile link (optional)", key="workspace_add_link")
+                new_review_status = st.selectbox("Review status", ["", "Approved", "Rejected", "Pending"],
+                                                  key="workspace_add_review_status")
+                new_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
+                                            key="workspace_add_channel")
+            new_content_angle = st.text_area("Notes (optional)", key="workspace_add_notes")
+
+            if st.button("Add Creator", type="primary", key="workspace_add_creator_button",
+                         disabled=not (new_platform and new_username)):
+                try:
+                    client = _get_github_client()
+                    client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
+                        "platform": new_platform,
+                        "username": new_username,
+                        "campaign": discovery_campaign,
+                        "profile_link": new_profile_link,
+                        "contact_email": new_email,
+                        "content_angle": new_content_angle,
+                        "review_status": new_review_status,
+                        "outreach_channel": new_channel,
+                    })
+                    st.success("Dispatched — check 'Add Manual Creator' in the Actions tab.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Couldn't dispatch: {exc}")
+        else:
+            st.caption(
+                "One creator per line: `platform,username,email,profile_link` — email and profile_link "
+                "are optional but the commas must still be there (e.g. `instagram,dudedad,,`). Review "
+                "status and channel apply to every row in this batch."
+            )
+            bulk_text = st.text_area("Creators", height=150, key="workspace_bulk_add_text",
+                                      placeholder="instagram,dudedad,,\ntiktok,someuser,someone@example.com,")
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                bulk_review_status = st.selectbox("Review status", ["", "Approved", "Rejected", "Pending"],
+                                                   key="workspace_bulk_review_status")
+            with bc2:
+                bulk_channel = st.selectbox("Outreach channel", ["", "email", "dm", "none"],
+                                             key="workspace_bulk_channel")
+
+            if st.button("Add All", type="primary", key="workspace_bulk_add_button",
+                         disabled=not bulk_text.strip()):
+                lines = [ln.strip() for ln in bulk_text.strip().splitlines() if ln.strip()]
+                client = _get_github_client()
+                dispatched, failed_lines = 0, []
+                for line in lines:
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) < 2 or not parts[0] or not parts[1]:
+                        failed_lines.append(line)
+                        continue
+                    platform_val, username_val = parts[0], parts[1]
+                    email_val = parts[2] if len(parts) > 2 else ""
+                    link_val = parts[3] if len(parts) > 3 else ""
+                    try:
+                        client.dispatch_workflow(config.WORKFLOW_ADD_MANUAL_CREATOR, {
+                            "platform": platform_val,
+                            "username": username_val,
+                            "campaign": discovery_campaign,
+                            "profile_link": link_val,
+                            "contact_email": email_val,
+                            "review_status": bulk_review_status,
+                            "outreach_channel": bulk_channel,
+                        })
+                        dispatched += 1
+                    except Exception:  # noqa: BLE001
+                        failed_lines.append(line)
+                st.success(f"Dispatched {dispatched} creator(s) — check 'Add Manual Creator' runs in "
+                           f"the Actions tab.")
+                if failed_lines:
+                    st.error(f"{len(failed_lines)} line(s) couldn't be parsed or dispatched: "
+                             + "; ".join(failed_lines))
+
 # =============================================================================
 # TAB 3 — Email (Sequences)
 # =============================================================================
