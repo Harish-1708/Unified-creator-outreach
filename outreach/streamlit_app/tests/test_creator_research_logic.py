@@ -108,3 +108,9 @@ def test_build_settings_commit_returns_correct_shape():
 def test_build_settings_commit_disable_wording():
     commit = crl.build_settings_commit({}, "X", asana_sync=False)
     assert "Disable" in commit["commit_message"]
+
+
+def test_load_current_settings_missing_file_returns_empty_dict():
+    """No campaign_settings.yaml committed yet is a legitimate, common
+    starting state — must not raise."""
+    assert crl.load_current_settings() == {}
