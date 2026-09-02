@@ -218,3 +218,41 @@ def test_build_add_brand_commit_shape():
     assert commit["path"] == "discovery/config/brands.yaml"
     assert b"SheRobe" in commit["content"]
     assert "SheRobe" in commit["commit_message"]
+
+
+# ---------- outreach campaign name sanitization ----------
+
+def test_sanitize_replaces_spaces_with_underscores():
+    assert crl.sanitize_to_outreach_campaign_name("DudeRobe Creator Discovery") == "DudeRobe_Creator_Discovery"
+
+
+def test_sanitize_is_deterministic():
+    """Same input must always produce the same output — this is the
+    entire point: a discovery Campaign always maps to one specific
+    outreach campaign name, never a different one on a later call."""
+    a = crl.sanitize_to_outreach_campaign_name("DudeRobe Creator Discovery")
+    b = crl.sanitize_to_outreach_campaign_name("DudeRobe Creator Discovery")
+    assert a == b
+
+
+def test_sanitize_result_matches_allowed_character_set():
+    import re
+    result = crl.sanitize_to_outreach_campaign_name("Dude-Robe's Campaign! (Q4/2026)")
+    assert re.match(r"^[A-Za-z0-9_]+$", result)
+
+
+def test_sanitize_collapses_multiple_special_chars_into_one_underscore():
+    result = crl.sanitize_to_outreach_campaign_name("Dude   Robe")
+    assert result == "Dude_Robe"
+
+
+def test_sanitize_strips_leading_trailing_underscores():
+    result = crl.sanitize_to_outreach_campaign_name("  DudeRobe  ")
+    assert result == "DudeRobe"
+
+
+def test_sanitize_never_returns_empty_string():
+    """An edge case worth guarding: a Campaign name that's ALL special
+    characters must still produce something valid, not an empty string
+    that would fail campaign_builder's own 'name is required' check."""
+    assert crl.sanitize_to_outreach_campaign_name("!!!") == "Campaign"
