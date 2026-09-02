@@ -1,0 +1,62 @@
+name: Add Manual Creator
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "instagram, tiktok, etc."
+        required: true
+      username:
+        description: "handle, without @"
+        required: true
+      campaign:
+        description: "Campaign — must match exactly (case-sensitive)"
+        required: true
+      profile_link:
+        description: "Optional — defaults to https://<platform>.com/<username> if left blank"
+        required: false
+      contact_email:
+        description: "Optional"
+        required: false
+      content_angle:
+        description: "Optional — notes on why this creator fits"
+        required: false
+      review_status:
+        description: "Optional — Approved, Rejected, or Pending. Blank leaves it pending review."
+        required: false
+      outreach_channel:
+        description: "Optional — email, dm, or none"
+        required: false
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Write service account file
+        run: echo "$GCP_SA_KEY" > service_account.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Add manual creator
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          PLATFORM: ${{ github.event.inputs.platform }}
+          USERNAME: ${{ github.event.inputs.username }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+          PROFILE_LINK: ${{ github.event.inputs.profile_link }}
+          CONTACT_EMAIL: ${{ github.event.inputs.contact_email }}
+          CONTENT_ANGLE: ${{ github.event.inputs.content_angle }}
+          REVIEW_STATUS: ${{ github.event.inputs.review_status }}
+          OUTREACH_CHANNEL: ${{ github.event.inputs.outreach_channel }}
+        run: python add_manual_creator.py
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
