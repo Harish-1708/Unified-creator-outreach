@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       creator_key:
-        description: "dedup_key of the creator (e.g. instagram:dudedad)"
+        description: "dedup_key of the creator (e.g. instagram:dudedad) — or a comma-separated list to apply the same decision to several at once (e.g. instagram:dudedad,instagram:joshherbert)"
         required: true
       campaign:
         description: "Campaign — must match exactly (case-sensitive)"
