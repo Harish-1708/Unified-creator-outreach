@@ -83,6 +83,14 @@ s1.metric("Runs", summary["run_count"])
 s2.metric("Total found (all runs)", summary["total_found"])
 s3.metric("Written to Master (all runs)", summary["total_after_filters"])
 
+st.page_link("pages/campaigns.py", label="Open Campaigns (Sequences, Schedule, Settings, Responses) →",
+             icon="🗂️")
+st.caption(
+    f"Once creators are pushed to '{campaign}' or another outreach campaign, everything about "
+    f"sending — sequence variants, scheduling, sender rotation, live responses — lives on that "
+    f"page already. Select the matching outreach campaign there."
+)
+
 st.divider()
 
 # =============================================================================
@@ -150,8 +158,39 @@ for r in campaign_rows:
     shortlist_row = shortlist_index.get((r.get("dedup_key"), r.get("Campaign", "")))
     r["Stage"] = crl.compute_lifecycle_stage(r, shortlist_row)
 
-tabs = st.tabs(crl.LEAD_DATA_VIEWS)
-for tab, view in zip(tabs, crl.LEAD_DATA_VIEWS):
+try:
+    excluded_records = connector.get_all_records_from_tab("Excluded")
+except Exception:  # noqa: BLE001
+    # Excluded tab may not exist yet — a campaign's first run that
+    # excluded nothing legitimately has no Excluded tab at all yet.
+    excluded_records = []
+excluded_campaign_rows = [r for r in excluded_records if r.get("Campaign") == campaign]
+
+# "Master" and the other Lead Data views come from crl.filter_creator_rows
+# (see its own docstring for why "Excluded" isn't one of them — it's a
+# genuinely separate sheet tab, not a filter of Master rows). Ordered
+# Master, Excluded, then the rest — matching the exact order asked for.
+all_tab_names = [crl.LEAD_DATA_VIEWS[0], "Excluded"] + crl.LEAD_DATA_VIEWS[1:]
+tabs = st.tabs(all_tab_names)
+
+with tabs[0]:
+    rows = crl.filter_creator_rows(campaign_rows, "Master")
+    if not rows:
+        st.caption("No rows in 'Master' for this campaign yet.")
+    else:
+        display_rows = [
+            {"Stage": r.get("Stage", ""), **{k: v for k, v in r.items() if k != "Stage"}}
+            for r in rows
+        ]
+        st.dataframe(display_rows, use_container_width=True)
+
+with tabs[1]:
+    if not excluded_campaign_rows:
+        st.caption("No excluded rows for this campaign yet.")
+    else:
+        st.dataframe(excluded_campaign_rows, use_container_width=True)
+
+for tab, view in zip(tabs[2:], crl.LEAD_DATA_VIEWS[1:]):
     with tab:
         rows = crl.filter_creator_rows(campaign_rows, view)
         if not rows:
@@ -177,7 +216,7 @@ st.divider()
 # =============================================================================
 st.subheader("Review Creators")
 
-pending_rows = crl.filter_creator_rows(campaign_rows, "Main")
+pending_rows = crl.filter_creator_rows(campaign_rows, "Master")
 review_options = [r["dedup_key"] for r in pending_rows if r.get("dedup_key")]
 
 if not review_options:
