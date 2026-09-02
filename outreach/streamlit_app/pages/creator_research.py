@@ -10,6 +10,7 @@ from auth import login_gate  # noqa: E402
 from sheets_readonly import ReadOnlySheetsConnector  # noqa: E402
 from github_client import GitHubClient  # noqa: E402
 import creator_research_logic as crl  # noqa: E402
+import config  # noqa: E402
 
 # Page config is set once, centrally, in app.py via st.navigation/st.Page —
 # calling st.set_page_config here too would raise an error.
@@ -124,31 +125,141 @@ with st.expander("⚙️ Campaign Settings"):
 st.divider()
 
 # =============================================================================
-# Lead Data — same underlying Shortlist rows, sliced into different views
+# Lead Data — same underlying Master rows, sliced into different views
 # =============================================================================
 st.subheader("Lead Data")
 
 try:
-    shortlist_records = connector.get_all_records_from_tab("Shortlist")
+    master_records = connector.get_all_records_from_tab("Master")
 except Exception as exc:  # noqa: BLE001
-    st.error(f"Couldn't read the Shortlist tab: {exc}")
+    st.error(f"Couldn't read the Master tab: {exc}")
     st.stop()
 
-campaign_rows = [r for r in shortlist_records if r.get("Campaign") == campaign]
+campaign_rows = [r for r in master_records if r.get("Campaign") == campaign]
 
 tabs = st.tabs(crl.LEAD_DATA_VIEWS)
 for tab, view in zip(tabs, crl.LEAD_DATA_VIEWS):
     with tab:
-        rows = crl.filter_shortlist_rows(campaign_rows, view)
+        rows = crl.filter_creator_rows(campaign_rows, view)
         if not rows:
             st.caption(f"No rows in '{view}' for this campaign yet.")
         else:
             st.dataframe(rows, use_container_width=True)
 
 st.divider()
+
+# =============================================================================
+# Review a creator — writes review_status/outreach_channel onto Master,
+# via the "Update Review Decision" workflow. Streamlit never writes to the
+# sheet directly, matching every other write action in this app.
+# =============================================================================
+st.subheader("Review a Creator")
+
+pending_rows = crl.filter_creator_rows(campaign_rows, "Main")
+review_options = [r["dedup_key"] for r in pending_rows if r.get("dedup_key")]
+
+if not review_options:
+    st.caption("No creators found for this campaign yet.")
+else:
+    selected_key = st.selectbox("Creator", review_options, key="review_creator_select")
+    selected_row = next((r for r in pending_rows if r["dedup_key"] == selected_key), {})
+
+    with st.expander("Evidence", expanded=True):
+        st.write(f"**Overall fit:** {selected_row.get('overall_fit', '—')}")
+        st.write(f"**Fit explanation:** {selected_row.get('fit_explanation', '—')}")
+        st.write(f"**Content angle:** {selected_row.get('content_angle', '—')}")
+        if selected_row.get("recent_post_captions"):
+            st.write(f"**Recent captions:** {selected_row['recent_post_captions']}")
+        if selected_row.get("dr_concerns"):
+            st.warning(f"**Concerns:** {selected_row['dr_concerns']}")
+        st.write(f"**Current review status:** {selected_row.get('review_status') or '(pending)'}")
+        st.write(f"**Current outreach channel:** {selected_row.get('outreach_channel') or '(none)'}")
+
+    new_review_status = st.radio("Review status", ["Approved", "Rejected", "Pending"],
+                                  key="review_status_radio")
+    new_channel = st.radio("Outreach channel", ["email", "dm", "none"], key="review_channel_radio")
+
+    if st.button("Save Decision", type="primary", key="save_review_decision"):
+        try:
+            client = _get_github_client()
+            client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
+                "creator_key": selected_key,
+                "campaign": campaign,
+                "review_status": new_review_status,
+                "outreach_channel": new_channel,
+            })
+            st.success(
+                "Dispatched — check the 'Update Review Decision' workflow run in the Actions "
+                "tab. Refresh this page once it completes to see the updated status."
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Couldn't dispatch the update: {exc}")
+
+st.divider()
+
+# =============================================================================
+# Sync Shortlist — a decision saved above only reaches the Shortlist tab
+# (what dm_drafting.py and the outreach bridge actually read from) once
+# this runs. Deliberately a separate, visible step, not automatic — same
+# reasoning as every other stage boundary in this pipeline.
+# =============================================================================
+st.subheader("Sync Shortlist")
 st.caption(
-    "**Not on this page yet:** approving a creator, choosing Email/DM, and pushing to a real "
-    "outreach campaign. Right now that's done via the 'Push Approved to Campaign' GitHub "
-    "Actions workflow directly. Bringing that action onto this page is the next piece of "
-    "work, not yet built."
+    "A saved decision above updates Master immediately, but doesn't reach the Shortlist tab "
+    "— what DM drafting and the 'Push to Outreach' step below actually read from — until this "
+    "runs. Safe to run any time; it only ever adds newly-approved rows, never removes anything."
+)
+if st.button("Run Sync Shortlist Now"):
+    try:
+        client = _get_github_client()
+        client.dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
+        st.success("Dispatched — check the 'Sync Shortlist' workflow run in the Actions tab.")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Couldn't dispatch Sync Shortlist: {exc}")
+
+st.divider()
+
+# =============================================================================
+# Push to Outreach — dispatches the existing bridge workflow directly.
+# Deliberately does NOT pre-check eligibility here (whether the creator is
+# actually in Shortlist yet, whether it's already been pushed) — the
+# workflow's own already-tested logic does that and reports clearly in its
+# run log; duplicating that check here would mean two places that could
+# disagree about what "eligible" means.
+# =============================================================================
+st.subheader("Push to Outreach")
+
+email_rows = crl.filter_creator_rows(campaign_rows, "Email")
+push_options = [r["dedup_key"] for r in email_rows if r.get("dedup_key")]
+
+if not push_options:
+    st.caption("No creators routed to Email for this campaign yet — set a creator's "
+               "outreach channel to 'email' above first.")
+else:
+    push_key = st.selectbox("Creator", push_options, key="push_creator_select")
+    outreach_campaign_name = st.text_input(
+        "Outreach campaign (must match an existing templates/ folder exactly)",
+        key="push_campaign_name",
+    )
+    dry_run = st.checkbox("Dry run (preview only, writes nothing)", value=True, key="push_dry_run")
+
+    if st.button("Push", type="primary", key="push_button", disabled=not outreach_campaign_name):
+        try:
+            client = _get_github_client()
+            client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
+                "outreach_campaign": outreach_campaign_name,
+                "dry_run": "true" if dry_run else "false",
+                "creator_keys": push_key,
+            })
+            st.success(
+                "Dispatched — check the 'Push Approved to Campaign' workflow run in the Actions "
+                "tab for the actual per-creator result (pushed/skipped/failed)."
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Couldn't dispatch the push: {exc}")
+
+st.divider()
+st.caption(
+    "**Not on this page yet:** DM Queue (manually tracking DM outreach outcomes) and Asana "
+    "status visibility. Both are separate, still-unbuilt pieces of work."
 )
