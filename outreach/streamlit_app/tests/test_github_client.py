@@ -463,3 +463,31 @@ def test_set_variable_raises_on_failure(monkeypatch):
 
     with pytest.raises(GitHubActionsError):
         _client().set_variable("BAD_NAME", "value")
+
+
+# ---------- get_file_content ----------
+
+def test_get_file_content_decodes_base64_correctly(monkeypatch):
+    import base64
+    real_content = "sales2:\n  slot: 1\n  address: a@b.com\n"
+    encoded = base64.b64encode(real_content.encode("utf-8")).decode("ascii")
+
+    def _fake_get(url, headers=None, params=None, timeout=None):
+        return _fake_response(200, {"content": encoded, "sha": "abc123"})
+
+    monkeypatch.setattr(github_client.requests, "get", _fake_get)
+    result = _client().get_file_content("outreach/config/email_account_slots.yaml")
+    assert result == real_content
+
+
+def test_get_file_content_returns_none_when_missing(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(404))
+    result = _client().get_file_content("outreach/config/email_account_slots.yaml")
+    assert result is None
+
+
+def test_get_file_content_raises_on_other_failures(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get",
+                         lambda *a, **kw: _fake_response(500, text="Internal Server Error"))
+    with pytest.raises(GitHubActionsError):
+        _client().get_file_content("outreach/config/email_account_slots.yaml")
