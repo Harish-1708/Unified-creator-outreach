@@ -571,7 +571,7 @@ def test_add_account_happy_path_writes_secret_and_mapping_and_triggers_health_ch
 
     import yaml as _yaml
     mapping_commit = commits_captured["commits"][0]
-    assert mapping_commit["path"] == "config/email_account_slots.yaml"
+    assert mapping_commit["path"] == "outreach/config/email_account_slots.yaml"
     written_mapping = _yaml.safe_load(mapping_commit["content"].decode("utf-8"))
     assert written_mapping == {"sales1": {"slot": 1, "address": "sales1@gmail.com"}}
 
@@ -664,7 +664,7 @@ def test_bulk_add_accounts_csv_adds_every_valid_row(tmp_path):
         "EMAIL_ACCOUNT_SLOT_1", "EMAIL_ACCOUNT_SLOT_2", "EMAIL_ACCOUNT_SLOT_3",
     }
     # exactly ONE mapping-file commit for the whole batch, not one per account
-    mapping_commits = [c for c in commits_captured["commits"] if c["path"] == "config/email_account_slots.yaml"]
+    mapping_commits = [c for c in commits_captured["commits"] if c["path"] == "outreach/config/email_account_slots.yaml"]
     assert len(mapping_commits) == 1
 
     import yaml as _yaml
