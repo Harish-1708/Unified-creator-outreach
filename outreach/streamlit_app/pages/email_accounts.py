@@ -16,7 +16,7 @@ from accounts_logic import (  # noqa: E402
     aggregate_sent_today_by_account, build_account_rows, build_health_lookup, merge_account_directories,
 )
 from email_account_slots_logic import (  # noqa: E402
-    SLOT_MAPPING_PATH, serialize_slot_mapping, add_account_to_mapping,
+    SLOT_MAPPING_PATH, serialize_slot_mapping, add_account_to_mapping, parse_slot_mapping,
     remove_account_from_mapping, update_account_address_in_mapping, read_local_slot_mapping,
     build_account_secret_payload, parse_bulk_accounts_csv,
 )
@@ -154,7 +154,14 @@ def _add_account_dialog(current_mapping):
                 st.error(e)
         else:
             try:
-                updated_mapping = add_account_to_mapping(current_mapping, name.strip(), address.strip())
+                client = _get_github_client()
+                # Fetched LIVE from GitHub, not the page-level `current_mapping`
+                # (which can be a stale, redeploy-lagged local copy) — see
+                # get_file_content's own docstring for the exact race this
+                # closes: an action taken between commits and this app's
+                # next redeploy must never be silently overwritten.
+                fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                updated_mapping = add_account_to_mapping(fresh_mapping, name.strip(), address.strip())
                 slot = updated_mapping[name.strip()]["slot"]
                 secret_payload = build_account_secret_payload(
                     name.strip(), address.strip(), password.strip(),
@@ -164,7 +171,6 @@ def _add_account_dialog(current_mapping):
                     imap_host=imap_host.strip() or None, imap_port=imap_port.strip() or None,
                     imap_username=imap_username.strip() or None,
                 )
-                client = _get_github_client()
                 client.set_secret(f"EMAIL_ACCOUNT_SLOT_{slot}", secret_payload)
                 client.create_file(
                     SLOT_MAPPING_PATH, serialize_slot_mapping(updated_mapping),
@@ -233,10 +239,11 @@ with st.expander("📥 Bulk Add Accounts (CSV)"):
                                         key="confirm_bulk_add_accounts")
             if st.button("Add All Accounts", type="primary", disabled=not confirm_bulk,
                          key="bulk_add_accounts_button"):
-                working_mapping = dict(slot_mapping)
+                client = _get_github_client()
+                # Fetched fresh, same reasoning as the single-add site above.
+                working_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
                 added_names = []
                 skipped = []
-                client = _get_github_client()
                 for row in parsed_accounts:
                     try:
                         working_mapping = add_account_to_mapping(working_mapping, row["name"], row["address"])
@@ -358,7 +365,9 @@ if manageable_names:
                     })
                     client.set_secret(f"EMAIL_ACCOUNT_SLOT_{entry['slot']}", secret_payload)
                 if new_address.strip() != entry["address"]:
-                    updated_mapping = update_account_address_in_mapping(slot_mapping, selected_name,
+                    # Fetched fresh, same reasoning as the add sites above.
+                    fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                    updated_mapping = update_account_address_in_mapping(fresh_mapping, selected_name,
                                                                          new_address.strip())
                     client.create_file(
                         SLOT_MAPPING_PATH, serialize_slot_mapping(updated_mapping),
@@ -375,7 +384,13 @@ if manageable_names:
             try:
                 client = _get_github_client()
                 client.delete_secret(f"EMAIL_ACCOUNT_SLOT_{entry['slot']}")
-                updated_mapping = remove_account_from_mapping(slot_mapping, selected_name)
+                # Fetched fresh, same reasoning as the add sites above —
+                # this is the exact fix for the observed bug: removing
+                # sales2 then adding sales3 before redeploy caught up
+                # resurrected sales2, because the add was computed from
+                # a stale mapping that still had it.
+                fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                updated_mapping = remove_account_from_mapping(fresh_mapping, selected_name)
                 client.create_file(
                     SLOT_MAPPING_PATH, serialize_slot_mapping(updated_mapping),
                     message=f"Remove email account '{selected_name}' (via Streamlit, by {current_user()})",
