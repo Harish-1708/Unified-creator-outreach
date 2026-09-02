@@ -161,7 +161,14 @@ if HAS_DISCOVERY:
         with st.form("workspace_add_brand_form"):
             st.subheader("Add Brand")
             new_brand_name = st.text_input("Brand name")
-            submitted = st.form_submit_button("Save")
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                submitted = st.form_submit_button("Save", type="primary")
+            with col_cancel:
+                cancelled = st.form_submit_button("Cancel")
+            if cancelled:
+                st.session_state["workspace_show_add_brand"] = False
+                st.rerun()
             if submitted:
                 if not new_brand_name.strip():
                     st.error("Brand name can't be blank.")
@@ -186,7 +193,14 @@ if HAS_DISCOVERY:
             else:
                 campaign_brand = st.selectbox("Brand", all_brands, key="workspace_new_campaign_brand")
                 new_campaign_name = st.text_input("New campaign name")
-            submitted = st.form_submit_button("Save")
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                submitted = st.form_submit_button("Save", type="primary")
+            with col_cancel:
+                cancelled = st.form_submit_button("Cancel")
+            if cancelled:
+                st.session_state["workspace_show_add_campaign"] = False
+                st.rerun()
             if submitted and all_brands:
                 if not new_campaign_name.strip():
                     st.error("Campaign name can't be blank.")
@@ -227,10 +241,18 @@ if HAS_DISCOVERY:
                         st.rerun()
 
     discovery_campaign = st.session_state.get("workspace_active_discovery_campaign")
-    if discovery_campaign:
-        st.success(f"Active campaign: **{discovery_campaign}**")
-    else:
+    if not discovery_campaign:
         st.caption("No campaign selected yet — expand a brand above and click 'Use this campaign'.")
+        st.stop()
+
+if discovery_campaign:
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back to Brands"):
+            st.session_state["workspace_active_discovery_campaign"] = None
+            st.rerun()
+    with col_title:
+        st.subheader(f"📍 {discovery_campaign}")
 
 tab_names = ["🔎 Creator Research", "🗂️ Campaigns", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
