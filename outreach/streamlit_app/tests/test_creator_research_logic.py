@@ -46,49 +46,56 @@ def test_campaign_summary_tolerates_blank_or_non_numeric_fields():
 
 # ---------- Lead Data view filtering ----------
 
-def _shortlist_row(dedup_key, outreach_channel="", review_status="Approved", dm_status=""):
+def _master_row(dedup_key, outreach_channel="", review_status="", dm_status=""):
     return {"dedup_key": dedup_key, "outreach_channel": outreach_channel,
             "review_status": review_status, "dm_status": dm_status}
 
 
-def test_main_and_shortlisted_views_return_every_row():
-    rows = [_shortlist_row("a"), _shortlist_row("b")]
-    assert crl.filter_shortlist_rows(rows, "Main") == rows
-    assert crl.filter_shortlist_rows(rows, "Shortlisted") == rows
+def test_main_view_returns_every_row_including_unreviewed():
+    """The bug this replaces: Main must show pending rows too, not just
+    already-approved ones — that's the whole point of a review queue."""
+    rows = [_master_row("a", review_status=""), _master_row("b", review_status="Approved")]
+    assert crl.filter_creator_rows(rows, "Main") == rows
+
+
+def test_shortlisted_view_filters_to_approved_only():
+    rows = [_master_row("a", review_status="Approved"), _master_row("b", review_status="")]
+    result = crl.filter_creator_rows(rows, "Shortlisted")
+    assert {r["dedup_key"] for r in result} == {"a"}
 
 
 def test_email_view_filters_to_email_channel_only():
-    rows = [_shortlist_row("a", outreach_channel="email"), _shortlist_row("b", outreach_channel="dm")]
-    result = crl.filter_shortlist_rows(rows, "Email")
+    rows = [_master_row("a", outreach_channel="email"), _master_row("b", outreach_channel="dm")]
+    result = crl.filter_creator_rows(rows, "Email")
     assert {r["dedup_key"] for r in result} == {"a"}
 
 
 def test_dm_view_filters_to_dm_channel_only():
-    rows = [_shortlist_row("a", outreach_channel="email"), _shortlist_row("b", outreach_channel="dm")]
-    result = crl.filter_shortlist_rows(rows, "DM")
+    rows = [_master_row("a", outreach_channel="email"), _master_row("b", outreach_channel="dm")]
+    result = crl.filter_creator_rows(rows, "DM")
     assert {r["dedup_key"] for r in result} == {"b"}
 
 
 def test_response_view_excludes_blank_and_pending_reasoning():
     rows = [
-        _shortlist_row("a", dm_status=""),
-        _shortlist_row("b", dm_status="pending_reasoning"),
-        _shortlist_row("c", dm_status="Sent"),
+        _master_row("a", dm_status=""),
+        _master_row("b", dm_status="pending_reasoning"),
+        _master_row("c", dm_status="Sent"),
     ]
-    result = crl.filter_shortlist_rows(rows, "Response")
+    result = crl.filter_creator_rows(rows, "Response")
     assert {r["dedup_key"] for r in result} == {"c"}
 
 
 def test_final_view_only_rejected_for_now():
-    rows = [_shortlist_row("a", review_status="Rejected"), _shortlist_row("b", review_status="Approved")]
-    result = crl.filter_shortlist_rows(rows, "Final")
+    rows = [_master_row("a", review_status="Rejected"), _master_row("b", review_status="Approved")]
+    result = crl.filter_creator_rows(rows, "Final")
     assert {r["dedup_key"] for r in result} == {"a"}
 
 
 def test_unknown_view_raises_clearly():
     import pytest
     with pytest.raises(ValueError):
-        crl.filter_shortlist_rows([], "NotARealView")
+        crl.filter_creator_rows([], "NotARealView")
 
 
 # ---------- Asana settings wiring ----------
