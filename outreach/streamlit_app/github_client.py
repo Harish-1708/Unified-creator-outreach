@@ -98,6 +98,28 @@ class GitHubClient:
             raise GitHubActionsError(f"Failed to check existing file '{path}': {resp.status_code} {resp.text[:300]}")
         return resp.json().get("sha")
 
+    def get_file_content(self, path: str, ref: str = "main") -> Optional[str]:
+        """Current LIVE content of the file at `path` on `ref` — decoded
+        text, or None if it doesn't exist yet.
+
+        This is the fix for a real read-modify-write race: any caller
+        that reads a file from a slow-to-update local disk copy (e.g. a
+        Streamlit Cloud app between deploys) and uses THAT as the basis
+        for a subsequent write can silently undo someone else's more
+        recent change — the write recomputes from stale data and
+        overwrites whatever changed in between. Fetching fresh from
+        GitHub's API immediately before every mutation closes that
+        window entirely, since this always reflects the actual latest
+        commit, never a redeploy-lagged copy."""
+        url = f"{GITHUB_API}/repos/{self.owner}/{self.repo}/contents/{path}"
+        resp = requests.get(url, headers=self._headers, params={"ref": ref}, timeout=self.timeout)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise GitHubActionsError(f"Failed to read '{path}': {resp.status_code} {resp.text[:300]}")
+        encoded = resp.json().get("content", "")
+        return base64.b64decode(encoded).decode("utf-8")
+
     def create_file(self, path: str, content_bytes: bytes, message: str, branch: str = "main") -> None:
         """Creates OR updates a file at `path`. Every write in this app —
         new templates, edited templates, campaign settings — goes through
