@@ -182,6 +182,50 @@ def get_asana_sync_status(all_settings: Dict, campaign: str) -> bool:
     return cs.is_asana_sync_enabled(campaign, all_settings)
 
 
+def load_brand_registry() -> list:
+    """Reads config/brands.yaml (explicitly-added brands with possibly
+    zero campaigns yet) — thin pass-through, same reasoning as
+    load_current_settings above."""
+    return cs.load_brands(os.path.join(_DISCOVERY_DIR, "config", "brands.yaml"))
+
+
+def list_all_brands_combined(run_log_records: List[Dict], all_settings: Dict) -> List[str]:
+    """Union of Run Log history, explicitly-added brands, and brands
+    implied by an explicitly-created campaign — see
+    campaign_settings.list_all_brands's own docstring for why all three
+    sources matter."""
+    run_log_brands = list_brands(run_log_records)
+    registry_brands = load_brand_registry()
+    return cs.list_all_brands(registry_brands, run_log_brands, all_settings)
+
+
+def list_all_campaigns_for_brand_combined(run_log_records: List[Dict], brand: str,
+                                           all_settings: Dict) -> List[str]:
+    run_log_campaigns = list_campaigns_for_brand(run_log_records, brand)
+    return cs.list_all_campaigns_for_brand(brand, run_log_campaigns, all_settings)
+
+
+def build_add_brand_commit(existing_brands: list, new_brand: str) -> Dict[str, object]:
+    new_yaml = cs.build_updated_brands_yaml(existing_brands, new_brand)
+    return {
+        "path": "discovery/config/brands.yaml",
+        "content": new_yaml.encode("utf-8"),
+        "commit_message": f"Add brand '{new_brand}'",
+    }
+
+
+def build_add_campaign_commit(all_settings: Dict, campaign: str, brand_name: str) -> Dict[str, object]:
+    """May raise ValueError (campaign name already used under a different
+    brand) — the caller is expected to catch it and show it as an error,
+    same as every other write action in this app."""
+    new_yaml = cs.build_new_campaign_yaml(all_settings, campaign, brand_name)
+    return {
+        "path": "discovery/config/campaign_settings.yaml",
+        "content": new_yaml.encode("utf-8"),
+        "commit_message": f"Add campaign '{campaign}' under brand '{brand_name}'",
+    }
+
+
 def build_settings_commit(all_settings: Dict, campaign: str, asana_sync: bool) -> Dict[str, object]:
     """Returns exactly what the page needs to hand to GitHubClient's
     commit method — the file content plus a clear commit message — without
