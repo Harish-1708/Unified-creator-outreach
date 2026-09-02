@@ -112,6 +112,23 @@ def filter_shortlist_rows(shortlist_records: List[Dict], view: str) -> List[Dict
 
 # ---------- Campaign Settings (Asana sync toggle) ----------
 
+# The commit path (used for the GitHub API) is repo-root-relative;
+# reading the file locally needs an actual filesystem path — the two are
+# NOT the same thing, and conflating them is exactly the kind of mistake
+# worth a named constant to prevent.
+_LOCAL_CAMPAIGN_SETTINGS_PATH = os.path.join(_DISCOVERY_DIR, "config", "campaign_settings.yaml")
+
+
+def load_current_settings() -> Dict:
+    """Reads whatever's on local disk right now. Same eventual-consistency
+    model this app's New Campaign page already uses for its own commits —
+    a change committed via Save here won't be visible from THIS reload
+    until Streamlit Cloud finishes redeploying, matching that page's own
+    "it'll appear... once the app finishes redeploying" behavior. Not a
+    new limitation, just the same one applied consistently."""
+    return cs.load_all_settings(_LOCAL_CAMPAIGN_SETTINGS_PATH)
+
+
 def get_asana_sync_status(all_settings: Dict, campaign: str) -> bool:
     """Thin pass-through to campaign_settings — kept here too so pages
     only ever import creator_research_logic, not both modules directly."""
