@@ -56,7 +56,7 @@ from sequences_logic import (  # noqa: E402
     build_variant_deletion_paths,
 )
 from campaign_builder import (  # noqa: E402
-    validate_variant_content, validate_campaign_name, build_campaign_files, get_next_stage_for_campaign,
+    validate_variant_content, build_campaign_files, get_next_stage_for_campaign,
     confirmation_matches_campaign_name, list_campaign_files_to_delete,
 )
 from campaign_status_logic import (  # noqa: E402
@@ -85,6 +85,39 @@ st.caption(
 def _get_github_client() -> GitHubClient:
     gh = st.secrets["github"]
     return GitHubClient(token=gh["token"], owner=gh["owner"], repo=gh["repo"])
+
+
+def _wait_for_run_completion(client, run_details, workflow_file: str,
+                              timeout_seconds: int = 90, poll_interval: int = 4):
+    """Polls a dispatched run until it reports 'completed', or gives up
+    after timeout_seconds. Returns (completed: bool, conclusion: str|None).
+
+    Dispatching a workflow only QUEUES it — GitHub Actions runs
+    asynchronously, so a fixed sleep before the next dependent step is
+    not a real guarantee the first one actually finished. Used
+    specifically for auto-chaining Save Decision -> Sync Shortlist ->
+    Push to Outreach, where each step genuinely needs the previous one
+    to have completed (not just been queued) before it reads the data
+    the previous step wrote."""
+    run_id = (run_details or {}).get("id") or (run_details or {}).get("run_id")
+    if not run_id:
+        time.sleep(2)
+        fallback = client.find_recent_run(workflow_file)
+        run_id = fallback.get("id") if fallback else None
+    if not run_id:
+        return False, None
+
+    elapsed = 0
+    while elapsed < timeout_seconds:
+        try:
+            run = client.get_run(run_id)
+            if run.get("status") == "completed":
+                return True, run.get("conclusion")
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    return False, None
 
 
 @st.cache_resource(show_spinner=False)
@@ -285,44 +318,42 @@ if HAS_DISCOVERY:
 
         st.stop()  # browser mode ends here — the tabs section below is never reached
 
-col_back, col_title = st.columns([1, 5])
+col_back, col_title, col_refresh_campaign = st.columns([1, 4, 1])
 with col_back:
     if st.button("← Back to Brands"):
         st.session_state["workspace_active_discovery_campaign"] = None
         st.rerun()
 with col_title:
     st.title(discovery_campaign)
+with col_refresh_campaign:
+    st.write("")
+    if st.button("🔄 Refresh"):
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        st.rerun()
 
-# Shared outreach-campaign selector for the Email/Schedule/Settings/
-# Responses tabs — placed here, once, clearly above the tab bar, rather
-# than sandwiched between two tab declarations. That used to place it
-# outside any `with tabs[N]:` block entirely, so it rendered on EVERY
-# tab regardless of which one was active — the "same thing shows on
-# every page" bug. This is a genuine shared control across those four
-# tabs (they're all facets of the same outreach.py campaign), so it
-# belongs at this level, visibly, not hidden inside one specific tab.
-try:
-    outreach_campaigns = list_campaigns()
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Couldn't list outreach campaigns: {exc}")
-    outreach_campaigns = []
-
-outreach_campaign = None
+# Outreach campaign is derived automatically from the discovery Campaign
+# — no separate selection, no separate creation. Every discovery Campaign
+# under a brand IS the outreach campaign too (sanitized into a valid
+# folder name — see sanitize_to_outreach_campaign_name's own docstring).
+# The Email/Schedule/Settings/Responses tabs below all use this same,
+# single, automatically-determined campaign.
+outreach_campaign = crl.sanitize_to_outreach_campaign_name(discovery_campaign)
 campaign_cfg = None
 leads_for_campaign, responses_for_campaign = [], []
-if outreach_campaigns:
-    outreach_campaign = st.selectbox("Outreach campaign (for Email / Schedule / Settings / Responses)",
-                                      outreach_campaigns, key="workspace_outreach_campaign")
-    try:
-        campaign_cfg = get_campaign_cfg(outreach_campaign)
-        is_draft = (campaign_cfg.get("status") or "active") == "draft"
-        if not is_draft:
-            leads_for_campaign, responses_for_campaign = _fetch_outreach_campaign_data(outreach_campaign)
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Couldn't load '{outreach_campaign}': {exc}")
-        campaign_cfg = None
+try:
+    campaign_cfg = get_campaign_cfg(outreach_campaign)
+    is_draft = (campaign_cfg.get("status") or "active") == "draft"
+    if not is_draft:
+        leads_for_campaign, responses_for_campaign = _fetch_outreach_campaign_data(outreach_campaign)
+except Exception:  # noqa: BLE001
+    # Genuinely expected the first time — no creator has been pushed to
+    # Email yet for this campaign, so it has no templates. Not an error;
+    # the Email/Schedule/Settings/Responses tabs below each show their own
+    # clear "doesn't exist yet" message rather than repeating one here.
+    campaign_cfg = None
 
-tab_names = ["🔎 Creator Research", "🗂️ Campaigns", "✉️ Email", "📅 Schedule", "⚙️ Settings",
+tab_names = ["🔎 Creator Research", "📊 Data", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
 tabs = st.tabs(tab_names)
 
@@ -597,95 +628,88 @@ with tabs[1]:
                                                   key="workspace_review_status_radio")
                     new_channel = st.radio("Outreach channel", ["email", "dm", "none"],
                                             key="workspace_review_channel_radio")
+
+                    outreach_target = crl.sanitize_to_outreach_campaign_name(discovery_campaign)
+                    new_subject, new_body = "", ""
+                    if new_channel == "email":
+                        try:
+                            campaign_exists_already = outreach_target in list_campaigns()
+                        except Exception:  # noqa: BLE001
+                            campaign_exists_already = False
+                        st.caption(f"Approving with channel 'email' automatically pushes into outreach "
+                                   f"campaign **'{outreach_target}'** once saved — no separate step.")
+                        if not campaign_exists_already:
+                            st.info(f"'{outreach_target}' doesn't exist yet — write its first email "
+                                    f"below; it's created automatically as part of saving.")
+                            new_subject = st.text_input("Subject", key="workspace_auto_push_subject")
+                            new_body = st.text_area("Body", key="workspace_auto_push_body", height=120)
+
                     if st.button(f"Save Decision for {len(selected_keys)} creator(s)", type="primary",
                                  key="workspace_save_review_decision"):
+                        if new_channel == "email" and not campaign_exists_already:
+                            content_error = validate_variant_content(new_subject, new_body, is_first_stage=True)
+                            if content_error:
+                                st.error(content_error)
+                                st.stop()
+
                         try:
                             client = _get_github_client()
-                            client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
-                                "creator_key": ",".join(selected_keys),
-                                "campaign": discovery_campaign,
-                                "review_status": new_review_status,
-                                "outreach_channel": new_channel,
-                            })
-                            # Auto-sync right after — the reason a creator
-                            # routed to DM didn't show up in DM Drafting
-                            # immediately before was this exact manual gap.
-                            time.sleep(2)
-                            client.dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
-                            st.success("Decision saved and Shortlist synced — check the Actions tab "
-                                       "for both runs. DM Drafting/Email views will reflect this once "
-                                       "both complete.")
-                        except Exception as exc:  # noqa: BLE001
-                            st.error(f"Couldn't dispatch: {exc}")
 
-                st.divider()
-                st.subheader("Push to Outreach")
-                email_rows = crl.filter_creator_rows(campaign_rows, "Email")
-                push_options = [r["dedup_key"] for r in email_rows if r.get("dedup_key")]
-                if push_options:
-                    push_key = st.selectbox("Creator", push_options, key="workspace_push_creator")
-
-                    # No separate outreach-campaign choice, and nothing to
-                    # create by hand: every discovery Campaign under a
-                    # brand IS the outreach campaign too — deterministically
-                    # sanitized into a valid folder name (see
-                    # sanitize_to_outreach_campaign_name's own docstring
-                    # for why: outreach names can't contain spaces).
-                    outreach_target = crl.sanitize_to_outreach_campaign_name(discovery_campaign)
-                    st.caption(f"Pushes into outreach campaign **'{outreach_target}'** — the same "
-                               f"campaign as this one, nothing separate to pick or create.")
-
-                    try:
-                        existing_outreach_campaigns = list_campaigns()
-                    except Exception:  # noqa: BLE001
-                        existing_outreach_campaigns = []
-                    campaign_already_exists = outreach_target in existing_outreach_campaigns
-
-                    new_subject, new_body = "", ""
-                    if not campaign_already_exists:
-                        st.info(f"'{outreach_target}' doesn't exist yet as an outreach campaign — write "
-                                f"its first email below and Push creates it automatically.")
-                        new_subject = st.text_input("Subject", key="workspace_push_new_campaign_subject")
-                        new_body = st.text_area("Body", key="workspace_push_new_campaign_body", height=120)
-
-                    dry_run_push = st.checkbox("Dry run", value=True, key="workspace_push_dry_run")
-
-                    if st.button("Push", type="primary", key="workspace_push_button"):
-                        validation_error = None
-                        if not campaign_already_exists:
-                            validation_error = (
-                                validate_campaign_name(outreach_target, existing_outreach_campaigns)
-                                or validate_variant_content(new_subject, new_body, is_first_stage=True)
-                            )
-                        if validation_error:
-                            st.error(validation_error)
-                        else:
-                            try:
-                                client = _get_github_client()
-                                if not campaign_already_exists:
-                                    files = build_campaign_files(outreach_target, "intro",
-                                                                  {"A": {"subject": new_subject,
-                                                                         "body": new_body}})
-                                    client.commit_campaign_files_directly(
-                                        files=files,
-                                        commit_message=f"Create campaign '{outreach_target}' (via "
-                                                       f"Workspace, by {current_user()})")
-                                    st.info(f"Campaign '{outreach_target}' created. Waiting a moment "
-                                            f"before pushing...")
-                                    time.sleep(3)
-                                client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
-                                    "outreach_campaign": outreach_target,
-                                    "dry_run": "true" if dry_run_push else "false",
-                                    "creator_keys": push_key,
+                            with st.spinner("Saving decision..."):
+                                decision_run = client.dispatch_workflow(config.WORKFLOW_UPDATE_REVIEW_DECISION, {
+                                    "creator_key": ",".join(selected_keys),
+                                    "campaign": discovery_campaign,
+                                    "review_status": new_review_status,
+                                    "outreach_channel": new_channel,
                                 })
-                                st.success("Dispatched — check 'Push Approved to Campaign' in the "
-                                           "Actions tab.")
-                            except Exception as exc:  # noqa: BLE001
-                                st.error(f"Couldn't dispatch: {exc}")
-                else:
-                    st.caption("No creators routed to Email yet.")
+                                decision_done, decision_conclusion = _wait_for_run_completion(
+                                    client, decision_run, config.WORKFLOW_UPDATE_REVIEW_DECISION)
 
-                st.divider()
+                            if not decision_done:
+                                st.warning("Decision dispatched but didn't confirm completion within the "
+                                           "wait — check the Actions tab. Sync/push were not attempted.")
+                            elif decision_conclusion != "success":
+                                st.error(f"Save Decision run finished with conclusion "
+                                         f"'{decision_conclusion}' — check the Actions tab. Sync/push "
+                                         f"were not attempted.")
+                            else:
+                                with st.spinner("Syncing Shortlist..."):
+                                    sync_run = client.dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
+                                    sync_done, sync_conclusion = _wait_for_run_completion(
+                                        client, sync_run, config.WORKFLOW_SYNC_SHORTLIST)
+
+                                if not sync_done:
+                                    st.warning("Decision saved, but Shortlist sync didn't confirm "
+                                               "completion within the wait — run it manually from here "
+                                               "once it finishes, or push manually afterward.")
+                                elif sync_conclusion != "success":
+                                    st.error(f"Sync Shortlist finished with conclusion "
+                                             f"'{sync_conclusion}' — check the Actions tab.")
+                                elif new_channel == "email":
+                                    with st.spinner("Pushing to outreach..."):
+                                        if not campaign_exists_already:
+                                            files = build_campaign_files(
+                                                outreach_target, "intro",
+                                                {"A": {"subject": new_subject, "body": new_body}})
+                                            client.commit_campaign_files_directly(
+                                                files=files,
+                                                commit_message=f"Create campaign '{outreach_target}' "
+                                                               f"(via Workspace, by {current_user()})")
+                                            time.sleep(3)  # brief settle before the push reads it
+                                        client.dispatch_workflow(config.WORKFLOW_PUSH_TO_CAMPAIGN, {
+                                            "outreach_campaign": outreach_target,
+                                            "dry_run": "false",
+                                            "creator_keys": ",".join(selected_keys),
+                                        })
+                                    st.success(f"Saved, synced, and pushed into '{outreach_target}' — "
+                                               f"check the Actions tab for the push run's per-creator "
+                                               f"result.")
+                                else:
+                                    st.success("Saved and synced.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Couldn't complete: {exc}")
+
+
                 st.subheader("+ Add Creator")
                 st.caption(
                     "For creators that never went through discovery — a referral, someone you already "
@@ -782,13 +806,28 @@ with tabs[1]:
         with inner_tabs[1]:
             if excluded_campaign_rows:
                 st.dataframe(excluded_campaign_rows, use_container_width=True)
+                st.divider()
+                st.subheader("Move to Master")
+                excluded_options = [r["dedup_key"] for r in excluded_campaign_rows if r.get("dedup_key")]
+                promote_key = st.selectbox("Creator", excluded_options, key="workspace_promote_creator")
+                if st.button("Move to Master", type="primary", key="workspace_promote_button"):
+                    try:
+                        client = _get_github_client()
+                        client.dispatch_workflow(config.WORKFLOW_PROMOTE_EXCLUDED, {
+                            "creator_key": promote_key,
+                            "campaign": discovery_campaign,
+                        })
+                        st.success("Dispatched — check 'Promote Excluded Creator' in the Actions tab. "
+                                   "It'll show up in Master, and disappear from here, once it completes.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't dispatch: {exc}")
             else:
                 st.caption("No excluded rows yet.")
         for inner_tab, view in zip(inner_tabs[2:], crl.LEAD_DATA_VIEWS[1:]):
             with inner_tab:
                 rows = crl.filter_creator_rows(campaign_rows, view)
                 if rows:
-                    st.dataframe(rows, use_container_width=True)
+                    st.dataframe([crl.curate_row(r) for r in rows], use_container_width=True)
                 else:
                     st.caption(f"No rows in '{view}' yet.")
 
@@ -797,7 +836,7 @@ with tabs[1]:
 # =============================================================================
 with tabs[2]:
     if not campaign_cfg:
-        st.caption("No outreach campaign selected/loaded.")
+        st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
         cname = campaign_cfg["_campaign_name"]
         try:
@@ -965,7 +1004,7 @@ with tabs[2]:
 # =============================================================================
 with tabs[3]:
     if not campaign_cfg:
-        st.caption("No outreach campaign selected/loaded.")
+        st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
         cname = campaign_cfg["_campaign_name"]
         current = get_current_schedule(campaign_cfg)
@@ -1016,7 +1055,7 @@ with tabs[3]:
 # =============================================================================
 with tabs[4]:
     if not campaign_cfg:
-        st.caption("No outreach campaign selected/loaded.")
+        st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
         cname = campaign_cfg["_campaign_name"]
         sending = campaign_cfg.get("sending", {})
@@ -1246,7 +1285,7 @@ with tabs[4]:
 # =============================================================================
 with tabs[5]:
     if not campaign_cfg:
-        st.caption("No outreach campaign selected/loaded.")
+        st.caption(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — " "push an approved Email creator from the Data tab to create it automatically.")
     else:
         cname = campaign_cfg["_campaign_name"]
         st.caption(
