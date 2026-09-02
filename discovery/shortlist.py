@@ -59,6 +59,11 @@ SHORTLIST_EXTRA_HEADERS = [
     # the queue can show when a status was last touched without needing a
     # separate audit log.
     "dm_notes", "dm_last_action_at",
+    # Asana sync's own dedupe key: blank means never synced (create a new
+    # task); present means update the existing one. Shortlist-only, same
+    # reasoning as dm_notes — this is meaningless before a row is already
+    # approved and routed to a channel.
+    "asana_task_id", "asana_synced_at",
 ]
 SHORTLIST_HEADERS = SECTOR_HEADERS + SHORTLIST_EXTRA_HEADERS
 
