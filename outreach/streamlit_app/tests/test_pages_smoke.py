@@ -536,6 +536,7 @@ def test_add_account_happy_path_writes_secret_and_mapping_and_triggers_health_ch
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", fake_dispatch):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -584,6 +585,7 @@ def test_add_account_custom_provider_fields_reach_the_secret(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", lambda self, w, i: None):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -637,6 +639,7 @@ def test_bulk_add_accounts_csv_adds_every_valid_row(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", lambda self, w, i: None):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -790,6 +793,7 @@ def test_manage_section_edit_address_commits_updated_mapping_no_secret_write(tmp
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: "sales1:\n  slot: 1\n  address: old@gmail.com\n"), \
          patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
@@ -864,6 +868,62 @@ def test_manage_section_remove_requires_confirmation_checkbox(tmp_path):
         assert remove_button.disabled is True  # confirm checkbox not checked yet
 
 
+def test_remove_uses_live_content_not_stale_local_copy(tmp_path):
+    """The actual bug being fixed: the LOCAL disk copy (what the page
+    would have used before this fix) still shows sales2 AND sales3 —
+    simulating a redeploy that hasn't caught up with a recent external
+    change yet. The LIVE GitHub content (what get_file_content returns)
+    reflects the more recent, correct state: sales2 already gone,
+    sales3 present. Removing sales3 must compute its result from the
+    LIVE content, not the stale local one — the commit must end up
+    with NEITHER sales2 nor sales3, not a resurrected sales2."""
+    _write_slot_mapping_fixture(
+        tmp_path,
+        "sales2:\n  slot: 1\n  address: harishdh16@gmail.com\n"
+        "sales3:\n  slot: 2\n  address: harish@kelson.agency\n",
+    )
+    captured, fake_set_secret, fake_delete_secret = _mock_secret_writes()
+    commits_captured, fake_create_file = _mock_github_writes()
+
+    live_content = "sales3:\n  slot: 2\n  address: harish@kelson.agency\n"
+
+    with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
+         patch("github_client.GitHubClient.delete_secret", fake_delete_secret), \
+         patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: live_content), \
+         patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
+        at.secrets.update(_dashboard_secrets())
+        for k, v in _authed_session().items():
+            at.session_state[k] = v
+        at.run()
+
+        select = next(sb for sb in at.selectbox if sb.key == "manage_account_select")
+        select.set_value("sales3")
+        at.run()
+
+        confirm_checkbox = next(cb for cb in at.checkbox if cb.key == "manage_confirm_remove_sales3")
+        confirm_checkbox.set_value(True)
+        at.run()
+
+        remove_button = next(b for b in at.button if b.key == "manage_remove_sales3")
+        remove_button.click()
+        at.run()
+
+    assert list(at.exception) == [], f"Remove raised: {list(at.exception)}"
+    assert list(at.error) == []
+
+    import yaml as _yaml
+    mapping_commit = commits_captured["commits"][0]
+    written_mapping = _yaml.safe_load(mapping_commit["content"].decode("utf-8")) or {}
+    assert "sales3" not in written_mapping
+    assert "sales2" not in written_mapping, (
+        "sales2 was resurrected — this means the removal was computed from the STALE "
+        "local copy instead of live GitHub content, exactly the bug this test guards against."
+    )
+
+
 def test_manage_section_remove_deletes_secret_and_updates_mapping(tmp_path):
     _write_slot_mapping_fixture(tmp_path, "sales1:\n  slot: 1\n  address: sales1@gmail.com\n")
     captured, fake_set_secret, fake_delete_secret = _mock_secret_writes()
@@ -872,6 +932,7 @@ def test_manage_section_remove_deletes_secret_and_updates_mapping(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.delete_secret", fake_delete_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
+         patch("github_client.GitHubClient.get_file_content", lambda self, path: "sales1:\n  slot: 1\n  address: sales1@gmail.com\n"), \
          patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
