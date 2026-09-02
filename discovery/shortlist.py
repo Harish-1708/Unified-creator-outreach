@@ -49,8 +49,26 @@ SECTOR_HEADERS = [
     "outreach_campaign", "outreach_record_id", "pushed_at", "push_error",
 ]
 
-SHORTLIST_EXTRA_HEADERS = ["fit_reasoning", "personalization_notes", "dm_draft", "dm_reasoning", "dm_status"]
+SHORTLIST_EXTRA_HEADERS = [
+    "fit_reasoning", "personalization_notes", "dm_draft", "dm_reasoning", "dm_status",
+    # Human-entered fields for the DM Queue page — distinct from
+    # personalization_notes (dm_drafting.py's OWN output) and dm_reasoning
+    # (also dm_drafting.py's own). These two are the only ones a human
+    # writes to directly: dm_notes for free-text outcome notes ("said
+    # they'll get back to us after the holidays"), dm_last_action_at so
+    # the queue can show when a status was last touched without needing a
+    # separate audit log.
+    "dm_notes", "dm_last_action_at",
+]
 SHORTLIST_HEADERS = SECTOR_HEADERS + SHORTLIST_EXTRA_HEADERS
+
+# The real, defined DM status vocabulary — referenced by the DM Queue page
+# and update_dm_status.py. Kept here, next to SHORTLIST_HEADERS, since
+# it's the schema for one of those columns, not a UI-only concern.
+DM_STATUS_OPTIONS = [
+    "Not Contacted", "Draft Ready", "Sent", "Follow-up Needed",
+    "Replied", "Interested", "Not Interested", "No Response", "Closed",
+]
 
 MAX_RETRIES = 5
 
