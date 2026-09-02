@@ -34,6 +34,24 @@ class FakeWorksheet:
         # data record and pollute get_all_records().
         pass
 
+    def row_values(self, row_num):
+        # Fake tabs in these tests are always constructed with the full,
+        # current header already in place — matching a tab that's already
+        # been through ensure_tab_headers() at least once. The self-healing
+        # behavior itself (missing -> appended) is covered directly in
+        # test_ensure_tab_headers_widens_a_stale_header below, against a
+        # deliberately SHORT header, not through this shared fake.
+        return list(self.headers) if row_num == 1 else []
+
+    def update(self, range_str, values):
+        # Functional (not just an assertion) so the sync-level integration
+        # test below can exercise a real stale-header widening through
+        # sync_shortlist() itself, not just the ensure_tab_headers()
+        # function in isolation. Every other existing test's fakes already
+        # have a full, current header, so this path is simply never
+        # reached for them — unaffected either way.
+        self.headers = self.headers + values[0]
+
     def append_rows(self, rows):
         for row in rows:
             self._rows.append(dict(zip(self.headers, row)))
@@ -134,3 +152,55 @@ def test_sync_skips_rows_already_in_shortlist_for_same_campaign(monkeypatch):
     fake_sheet._tabs["Shortlist"] = existing
     shortlist_ws = _run_sync(monkeypatch, fake_sheet)
     assert len(shortlist_ws.get_all_records()) == 1  # still just the pre-existing one, not duplicated
+
+
+def test_ensure_tab_headers_widens_a_stale_header_without_moving_data():
+    """The actual bug: a Shortlist tab created before SECTOR_HEADERS grew
+    (13 columns added across this build) never had its header row
+    refreshed, so new columns were appended as real, correctly-positioned
+    data with no label above them. This must self-heal: missing headers
+    get appended, existing ones untouched, existing data never moves."""
+    stale_header = ["dedup_key", "platform", "profile_link", "username"]
+    ws = FakeWorksheet(stale_header, rows=[
+        {"dedup_key": "instagram:dudedad", "platform": "instagram",
+         "profile_link": "https://instagram.com/dudedad", "username": "dudedad"},
+    ])
+
+    class WideningFakeWorksheet(FakeWorksheet):
+        def row_values(self, row_num):
+            return list(self.headers) if row_num == 1 else []
+
+        def update(self, range_str, values):
+            # Mirrors the real behavior ensure_tab_headers relies on:
+            # appends new header cells starting at range_str, doesn't
+            # touch anything already there.
+            self.headers = self.headers + values[0]
+
+    ws.__class__ = WideningFakeWorksheet
+
+    full_headers = shortlist.SHORTLIST_HEADERS
+    result = shortlist.ensure_tab_headers(ws, full_headers)
+
+    assert result == full_headers
+    assert ws.headers[:4] == stale_header  # original columns untouched, not reordered
+    # The row that existed before widening must still read correctly by
+    # its original column names — nothing about the underlying data moved.
+    assert ws.get_all_records()[0]["username"] == "dudedad"
+
+
+def test_sync_shortlist_widens_an_already_existing_stale_shortlist_tab(monkeypatch):
+    """Closes the gap the sabotage check exposed: the other sync_shortlist
+    tests all use fakes whose headers are already current, so they'd pass
+    even if the widening call were silently removed. This one gives
+    sync_shortlist() a Shortlist tab that ALREADY EXISTS with a stale,
+    short header — exactly the real-world scenario reported — and checks
+    that running sync_shortlist() itself widens it, not just that the
+    ensure_tab_headers() function works when called directly."""
+    fake_sheet = FakeSheet([_master_row("instagram:dudedad", "DudeRobe", "Approved")])
+    stale_shortlist = FakeWorksheet(["dedup_key", "platform", "profile_link", "username"])
+    fake_sheet._tabs["Shortlist"] = stale_shortlist
+
+    shortlist_ws = _run_sync(monkeypatch, fake_sheet)
+
+    assert set(shortlist.SHORTLIST_HEADERS).issubset(set(shortlist_ws.headers))
+    assert shortlist_ws.headers[:4] == ["dedup_key", "platform", "profile_link", "username"]
