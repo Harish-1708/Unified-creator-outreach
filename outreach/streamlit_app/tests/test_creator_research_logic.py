@@ -316,3 +316,81 @@ def test_reorder_handles_missing_priority_column_gracefully():
     row = {"platform": "instagram", "username": "b"}  # no dedup_key, no contact_email
     reordered = crl.reorder_priority_columns(row, ["dedup_key", "username", "contact_email"])
     assert reordered == {"username": "b", "platform": "instagram"}
+
+
+# ---------- campaign analytics ----------
+
+def _run_log_row(brand, campaign, found="10", after_filters="3"):
+    return {"brand_name": brand, "campaign": campaign, "total_found": found, "total_after_filters": after_filters}
+
+
+def _analytics_master_row(campaign, review_status="", channel=""):
+    return {"Campaign": campaign, "review_status": review_status, "outreach_channel": channel}
+
+
+def test_build_campaign_analytics_one_row_per_campaign():
+    run_log = [_run_log_row("DudeRobe", "DudeRobe Creator Discovery"),
+               _run_log_row("SheRobe", "SheRobe Launch")]
+    result = crl.build_campaign_analytics(run_log, [])
+    campaigns = {r["Campaign"] for r in result}
+    assert campaigns == {"DudeRobe Creator Discovery", "SheRobe Launch"}
+
+
+def test_build_campaign_analytics_sums_multiple_runs_for_same_campaign():
+    run_log = [_run_log_row("DudeRobe", "X", found="10", after_filters="3"),
+               _run_log_row("DudeRobe", "X", found="20", after_filters="5")]
+    result = crl.build_campaign_analytics(run_log, [])
+    assert result[0]["Runs"] == 2
+    assert result[0]["Found (all runs)"] == 30
+    assert result[0]["Written to Master"] == 8
+
+
+def test_build_campaign_analytics_counts_review_status_and_channel_from_master():
+    run_log = [_run_log_row("DudeRobe", "X")]
+    master = [
+        _analytics_master_row("X", review_status="Approved", channel="email"),
+        _analytics_master_row("X", review_status="Approved", channel="dm"),
+        _analytics_master_row("X", review_status="Rejected"),
+        _analytics_master_row("X", review_status=""),
+    ]
+    result = crl.build_campaign_analytics(run_log, master)
+    row = result[0]
+    assert row["In Master now"] == 4
+    assert row["Approved"] == 2
+    assert row["Rejected"] == 1
+    assert row["Pending"] == 1
+    assert row["Email"] == 1
+    assert row["DM"] == 1
+
+
+def test_build_campaign_analytics_master_rows_scoped_to_correct_campaign():
+    """Master rows from a DIFFERENT campaign must never bleed into this
+    one's counts — the same compound-key discipline as everywhere else."""
+    run_log = [_run_log_row("DudeRobe", "CampaignA")]
+    master = [_analytics_master_row("CampaignA", review_status="Approved"),
+              _analytics_master_row("CampaignB", review_status="Approved")]
+    result = crl.build_campaign_analytics(run_log, master)
+    assert result[0]["In Master now"] == 1
+
+
+def test_build_campaign_analytics_zero_master_rows_still_produces_a_row():
+    """A campaign with real Run Log history but no Master rows yet (found
+    nothing, or still running) should show zeros, not disappear."""
+    run_log = [_run_log_row("DudeRobe", "X")]
+    result = crl.build_campaign_analytics(run_log, [])
+    assert result[0]["In Master now"] == 0
+
+
+def test_build_analytics_totals_sums_across_campaigns():
+    campaign_rows = [
+        {"Brand": "DudeRobe", "Campaign": "A", "Runs": 1, "In Master now": 5, "Approved": 2,
+         "Rejected": 1, "Pending": 2, "Email": 1, "DM": 1},
+        {"Brand": "SheRobe", "Campaign": "B", "Runs": 2, "In Master now": 3, "Approved": 1,
+         "Rejected": 0, "Pending": 2, "Email": 1, "DM": 0},
+    ]
+    totals = crl.build_analytics_totals(campaign_rows)
+    assert totals["brands"] == 2
+    assert totals["campaigns"] == 2
+    assert totals["runs"] == 3
+    assert totals["in_master"] == 8
+    assert totals["approved"] == 3
