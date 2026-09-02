@@ -46,6 +46,7 @@ SECTOR_HEADERS = [
     "matched_query", "matched_hashtag", "matched_archetype", "matched_lane", "discovery_method",
     "date_added",
     "review_status", "outreach_channel", "campaign_push_status",
+    "outreach_campaign", "outreach_record_id", "pushed_at", "push_error",
 ]
 
 SHORTLIST_EXTRA_HEADERS = ["fit_reasoning", "personalization_notes", "dm_draft", "dm_reasoning", "dm_status"]
