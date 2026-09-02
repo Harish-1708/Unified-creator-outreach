@@ -284,3 +284,35 @@ def test_curate_row_never_invents_values():
     row = {"dedup_key": "instagram:dudedad", "platform": "instagram"}
     curated = crl.curate_row(row)
     assert "dm_status" not in curated  # not present on input, must not appear with a blank/None value
+
+
+def test_curate_row_places_contact_email_near_username_not_at_the_end():
+    row = {"dedup_key": "instagram:dudedad", "username": "dudedad", "platform": "instagram",
+           "content_angle": "some angle", "contact_email": "dudedad@example.com"}
+    curated = crl.curate_row(row)
+    keys_in_order = list(curated.keys())
+    assert keys_in_order.index("contact_email") < keys_in_order.index("platform")
+    assert keys_in_order.index("contact_email") == keys_in_order.index("username") + 1
+
+
+# ---------- reorder_priority_columns ----------
+
+def test_reorder_moves_priority_columns_to_front_in_given_order():
+    row = {"platform": "instagram", "dedup_key": "instagram:dudedad", "content_angle": "x",
+           "username": "dudedad", "contact_email": "d@example.com"}
+    reordered = crl.reorder_priority_columns(row, ["dedup_key", "username", "contact_email"])
+    keys = list(reordered.keys())
+    assert keys[:3] == ["dedup_key", "username", "contact_email"]
+
+
+def test_reorder_preserves_every_value_nothing_lost():
+    row = {"platform": "instagram", "dedup_key": "a", "username": "b", "contact_email": "c", "score": 8}
+    reordered = crl.reorder_priority_columns(row, ["dedup_key", "username", "contact_email"])
+    assert reordered == {"dedup_key": "a", "username": "b", "contact_email": "c",
+                          "platform": "instagram", "score": 8}
+
+
+def test_reorder_handles_missing_priority_column_gracefully():
+    row = {"platform": "instagram", "username": "b"}  # no dedup_key, no contact_email
+    reordered = crl.reorder_priority_columns(row, ["dedup_key", "username", "contact_email"])
+    assert reordered == {"username": "b", "platform": "instagram"}
