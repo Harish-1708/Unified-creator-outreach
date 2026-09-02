@@ -93,6 +93,20 @@ def _get_discovery_connector() -> ReadOnlySheetsConnector:
     return ReadOnlySheetsConnector(service_account_info=sa_info, sheet_id=sheet_id)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_discovery_tab(tab_name: str):
+    """Cached by tab_name alone (a plain, hashable string) — the connector
+    itself doesn't need to be an argument, since _get_discovery_connector
+    is already a cached singleton (@st.cache_resource above); calling it
+    from inside this cached function doesn't create a new connection.
+    Without this, every rerun re-reads every tab from scratch — Streamlit
+    reruns the ENTIRE script on almost any click, so a few minutes of
+    ordinary use easily exceeds Google's per-minute read quota and returns
+    a 429. Same fix, same reasoning as outreach.py's own Campaigns page
+    (_fetch_full_campaign_data_cached)."""
+    return _get_discovery_connector().get_all_records_from_tab(tab_name)
+
+
 @st.cache_resource(show_spinner=False)
 def _get_outreach_connector() -> ReadOnlySheetsConnector:
     sa_info = dict(st.secrets["google_sheets_readonly"]["service_account_json"])
@@ -131,17 +145,16 @@ master_records = []
 excluded_records = []
 if HAS_DISCOVERY:
     try:
-        discovery_connector = _get_discovery_connector()
-        discovery_run_log = discovery_connector.get_all_records_from_tab("Run Log")
+        discovery_run_log = _fetch_discovery_tab("Run Log")
     except Exception as exc:  # noqa: BLE001
         st.error(f"Couldn't read the discovery sheet: {exc}")
         discovery_run_log = []
     try:
-        master_records = discovery_connector.get_all_records_from_tab("Master")
+        master_records = _fetch_discovery_tab("Master")
     except Exception:  # noqa: BLE001
         master_records = []
     try:
-        excluded_records = discovery_connector.get_all_records_from_tab("Excluded")
+        excluded_records = _fetch_discovery_tab("Excluded")
     except Exception:  # noqa: BLE001
         excluded_records = []
 
@@ -159,18 +172,16 @@ if HAS_DISCOVERY:
     if not discovery_campaign:
         col_search, col_add_brand, col_add_campaign, col_refresh = st.columns([3, 1, 1, 1])
         with col_search:
-            brand_search = st.text_input("🔍 Search brands", key="workspace_brand_search")
+            brand_search = st.text_input("🔍 Search brands", label_visibility="collapsed",
+                                          placeholder="🔍 Search brands", key="workspace_brand_search")
         with col_add_brand:
-            st.write("")
-            if st.button("➕ Add Brand"):
+            if st.button("➕ Add Brand", width="stretch"):
                 st.session_state["workspace_show_add_brand"] = True
         with col_add_campaign:
-            st.write("")
-            if st.button("➕ Add Campaign"):
+            if st.button("➕ Add Campaign", width="stretch"):
                 st.session_state["workspace_show_add_campaign"] = True
         with col_refresh:
-            st.write("")
-            if st.button("🔄 Refresh"):
+            if st.button("🔄 Refresh", width="stretch"):
                 st.cache_resource.clear()
                 st.cache_data.clear()
                 st.rerun()
@@ -281,6 +292,35 @@ with col_back:
 with col_title:
     st.title(discovery_campaign)
 
+# Shared outreach-campaign selector for the Email/Schedule/Settings/
+# Responses tabs — placed here, once, clearly above the tab bar, rather
+# than sandwiched between two tab declarations. That used to place it
+# outside any `with tabs[N]:` block entirely, so it rendered on EVERY
+# tab regardless of which one was active — the "same thing shows on
+# every page" bug. This is a genuine shared control across those four
+# tabs (they're all facets of the same outreach.py campaign), so it
+# belongs at this level, visibly, not hidden inside one specific tab.
+try:
+    outreach_campaigns = list_campaigns()
+except Exception as exc:  # noqa: BLE001
+    st.error(f"Couldn't list outreach campaigns: {exc}")
+    outreach_campaigns = []
+
+outreach_campaign = None
+campaign_cfg = None
+leads_for_campaign, responses_for_campaign = [], []
+if outreach_campaigns:
+    outreach_campaign = st.selectbox("Outreach campaign (for Email / Schedule / Settings / Responses)",
+                                      outreach_campaigns, key="workspace_outreach_campaign")
+    try:
+        campaign_cfg = get_campaign_cfg(outreach_campaign)
+        is_draft = (campaign_cfg.get("status") or "active") == "draft"
+        if not is_draft:
+            leads_for_campaign, responses_for_campaign = _fetch_outreach_campaign_data(outreach_campaign)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Couldn't load '{outreach_campaign}': {exc}")
+        campaign_cfg = None
+
 tab_names = ["🔎 Creator Research", "🗂️ Campaigns", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
 tabs = st.tabs(tab_names)
@@ -289,39 +329,36 @@ tabs = st.tabs(tab_names)
 # TAB 1 — Creator Research
 # =============================================================================
 with tabs[0]:
-    if not HAS_DISCOVERY or not discovery_campaign:
-        st.caption("Select a Brand and Discovery Campaign above.")
-    else:
-        summary = crl.campaign_summary(discovery_run_log, discovery_campaign)
-        s1, s2, s3 = st.columns(3)
-        s1.metric("Runs", summary["run_count"])
-        s2.metric("Total found (all runs)", summary["total_found"])
-        s3.metric("Written to Master (all runs)", summary["total_after_filters"])
+    summary = crl.campaign_summary(discovery_run_log, discovery_campaign)
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Runs", summary["run_count"])
+    s2.metric("Total found (all runs)", summary["total_found"])
+    s3.metric("Written to Master (all runs)", summary["total_after_filters"])
 
-        # Reuses master_records/excluded_records fetched once at the top of
-        # the page (for the brand-card stats above) rather than re-reading
-        # the same tabs again here.
-        cr_master_rows = [r for r in master_records if r.get("Campaign") == discovery_campaign]
-        cr_excluded_rows = [r for r in excluded_records if r.get("Campaign") == discovery_campaign]
+    # Reuses master_records/excluded_records fetched once at the top of
+    # the page (for the brand-card stats above) rather than re-reading
+    # the same tabs again here.
+    cr_master_rows = [r for r in master_records if r.get("Campaign") == discovery_campaign]
+    cr_excluded_rows = [r for r in excluded_records if r.get("Campaign") == discovery_campaign]
 
-        st.write(f"**Master:** {len(cr_master_rows)} row(s) · **Excluded:** {len(cr_excluded_rows)} row(s)")
+    st.write(f"**Master:** {len(cr_master_rows)} row(s) · **Excluded:** {len(cr_excluded_rows)} row(s)")
 
-        with st.expander("Master data", expanded=True):
-            if cr_master_rows:
-                st.dataframe(cr_master_rows, use_container_width=True)
-            else:
-                st.caption("No Master rows for this campaign yet.")
-        with st.expander("Excluded data"):
-            if cr_excluded_rows:
-                st.dataframe(cr_excluded_rows, use_container_width=True)
-            else:
-                st.caption("No excluded rows for this campaign yet.")
+    with st.expander("Master data", expanded=True):
+        if cr_master_rows:
+            st.dataframe(cr_master_rows, use_container_width=True)
+        else:
+            st.caption("No Master rows for this campaign yet.")
+    with st.expander("Excluded data"):
+        if cr_excluded_rows:
+            st.dataframe(cr_excluded_rows, use_container_width=True)
+        else:
+            st.caption("No excluded rows for this campaign yet.")
 
-        st.caption(
-            "To run a NEW discovery pass or add more data to this campaign, trigger the "
-            "'Creator Discovery Pipeline' workflow from the Actions tab with this Campaign name "
-            "— a live in-page progress/running-time view isn't built yet."
-        )
+    st.caption(
+        "To run a NEW discovery pass or add more data to this campaign, trigger the "
+        "'Creator Discovery Pipeline' workflow from the Actions tab with this Campaign name "
+        "— running discovery directly from this page isn't built yet."
+    )
 
 # =============================================================================
 # TAB 2 — Campaigns (Master | Excluded | Shortlist | Email | DM | Response
@@ -336,7 +373,7 @@ with tabs[1]:
         # (used for the brand cards) — only Shortlist is fetched fresh
         # here, since nothing else on the page needs it yet.
         try:
-            shortlist_records = discovery_connector.get_all_records_from_tab("Shortlist")
+            shortlist_records = _fetch_discovery_tab("Shortlist")
         except Exception:  # noqa: BLE001
             shortlist_records = []
 
@@ -421,32 +458,6 @@ with tabs[1]:
                     st.error(f"Couldn't dispatch: {exc}")
         else:
             st.caption("No creators routed to Email yet.")
-
-try:
-    outreach_campaigns = list_campaigns()
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Couldn't list outreach campaigns: {exc}")
-    outreach_campaigns = []
-
-# =============================================================================
-# TABS 3-6 (Email / Schedule / Settings / Responses) share ONE outreach
-# campaign selector — they're all facets of the same outreach.py campaign,
-# unlike the discovery-side tabs above.
-# =============================================================================
-outreach_campaign = None
-campaign_cfg = None
-leads_for_campaign, responses_for_campaign = [], []
-if outreach_campaigns:
-    outreach_campaign = st.selectbox("Outreach campaign (for Email / Schedule / Settings / Responses)",
-                                      outreach_campaigns, key="workspace_outreach_campaign")
-    try:
-        campaign_cfg = get_campaign_cfg(outreach_campaign)
-        is_draft = (campaign_cfg.get("status") or "active") == "draft"
-        if not is_draft:
-            leads_for_campaign, responses_for_campaign = _fetch_outreach_campaign_data(outreach_campaign)
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Couldn't load '{outreach_campaign}': {exc}")
-        campaign_cfg = None
 
 # =============================================================================
 # TAB 3 — Email (Sequences)
@@ -939,7 +950,7 @@ with tabs[6]:
         st.caption("Select a Brand and Discovery Campaign above.")
     else:
         try:
-            shortlist_records_dm = discovery_connector.get_all_records_from_tab("Shortlist")
+            shortlist_records_dm = _fetch_discovery_tab("Shortlist")
         except Exception as exc:  # noqa: BLE001
             st.error(f"Couldn't read Shortlist: {exc}")
             shortlist_records_dm = []
