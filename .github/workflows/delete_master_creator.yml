@@ -1,0 +1,38 @@
+name: Delete Master Creator
+
+on:
+  workflow_dispatch:
+    inputs:
+      creator_key:
+        description: "dedup_key(s), comma-separated to delete several at once — PERMANENT, removes from Master AND Shortlist"
+        required: true
+      campaign:
+        description: "Campaign — must match exactly (case-sensitive)"
+        required: true
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Write service account file
+        run: echo "$GCP_SA_KEY" > service_account.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Delete Master creator(s)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          CREATOR_KEY: ${{ github.event.inputs.creator_key }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+        run: python delete_master_creator.py
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json

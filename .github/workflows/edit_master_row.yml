@@ -1,0 +1,54 @@
+name: Edit Master Row
+
+on:
+  workflow_dispatch:
+    inputs:
+      creator_key:
+        description: "dedup_key of the creator (e.g. instagram:dudedad) — identity, not changed by this"
+        required: true
+      campaign:
+        description: "Campaign — must match exactly (case-sensitive)"
+        required: true
+      contact_email:
+        description: "New value (blank clears it)"
+        required: false
+      username:
+        description: "New value (blank clears it) — display only, does not change dedup_key"
+        required: false
+      profile_link:
+        description: "New value (blank clears it)"
+        required: false
+      content_angle:
+        description: "New value (blank clears it)"
+        required: false
+
+jobs:
+  edit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Write service account file
+        run: echo "$GCP_SA_KEY" > service_account.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Edit Master row
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          CREATOR_KEY: ${{ github.event.inputs.creator_key }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+          CONTACT_EMAIL: ${{ github.event.inputs.contact_email }}
+          USERNAME: ${{ github.event.inputs.username }}
+          PROFILE_LINK: ${{ github.event.inputs.profile_link }}
+          CONTENT_ANGLE: ${{ github.event.inputs.content_angle }}
+        run: python edit_master_row.py
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
