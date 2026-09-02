@@ -363,22 +363,13 @@ tabs = st.tabs(tab_names)
 # I'm already inside doing", answerable from data already fetched above).
 # =============================================================================
 with tabs[0]:
-    this_campaign_rows = [r for r in crl.build_campaign_analytics(discovery_run_log, master_records)
-                           if r["Campaign"] == discovery_campaign]
-    if not this_campaign_rows:
-        st.caption("No data yet for this campaign.")
-    else:
-        row = this_campaign_rows[0]
-        a1, a2, a3 = st.columns(3)
-        a1.metric("Runs", row["Runs"])
-        a2.metric("Found (all runs)", row["Found (all runs)"])
-        a3.metric("In Master now", row["In Master now"])
-        a4, a5, a6, a7, a8 = st.columns(5)
-        a4.metric("Approved", row["Approved"])
-        a5.metric("Rejected", row["Rejected"])
-        a6.metric("Pending", row["Pending"])
-        a7.metric("Routed to Email", row["Email"])
-        a8.metric("Routed to DM", row["DM"])
+    excluded_rows_for_analytics = [r for r in excluded_records if r.get("Campaign") == discovery_campaign]
+    master_rows_for_analytics = [r for r in master_records if r.get("Campaign") == discovery_campaign]
+    table_rows = crl.build_single_campaign_table(discovery_run_log, master_rows_for_analytics,
+                                                  excluded_rows_for_analytics)
+    st.dataframe(table_rows, use_container_width=True, hide_index=True,
+                 column_config={"Metric": st.column_config.TextColumn(width="large"),
+                                "Count": st.column_config.NumberColumn(width="small")})
 
 # =============================================================================
 # TAB 1 — Creator Research
