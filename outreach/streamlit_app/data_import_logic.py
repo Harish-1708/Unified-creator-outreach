@@ -29,19 +29,90 @@ def _normalize(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
-def build_default_mapping(csv_columns: List[str], custom_columns: List[str]) -> Dict[str, str]:
+def build_default_mapping(csv_columns: List[str], custom_columns: List[str],
+                           reserved_names: Optional[List[str]] = None) -> Dict[str, str]:
     """Best-effort auto-mapping by normalized name match, so the user
     usually just reviews/adjusts rather than mapping from scratch.
     Returns {csv_column: target_field_or_empty_string} — "" means
     unmapped/skip. Known fields (FirstName/LastName/Email/Company) are
-    preferred over a same-named custom column, in case of a clash."""
+    preferred over a same-named custom column, in case of a clash.
+
+    Any column matching nothing existing defaults to a NEW custom field
+    using its own column name — not "Skip". The rarer case of wanting a
+    different name than the CSV's own header is still available via the
+    "+ New custom field..." UI option; this default just means the common
+    case (bring in every column) takes zero clicks instead of one per
+    column. The one exception: a column whose own name collides with a
+    reserved system column (outreach.MASTER_COLUMNS) defaults to Skip,
+    not auto-mapping to itself — mapping a CSV's own "Status" column
+    straight onto the system's tracked Status column would silently
+    corrupt real send-tracking data on the next import."""
+    reserved_lower = {r.lower() for r in (reserved_names or [])}
     known_by_norm = {_normalize(f): f for f in KNOWN_FIELDS}
     custom_by_norm = {_normalize(c): c for c in custom_columns}
     mapping = {}
     for col in csv_columns:
         key = _normalize(col)
-        mapping[col] = known_by_norm.get(key) or custom_by_norm.get(key) or ""
+        matched = known_by_norm.get(key) or custom_by_norm.get(key)
+        if matched:
+            mapping[col] = matched
+        elif col.lower() in reserved_lower:
+            mapping[col] = ""
+        else:
+            mapping[col] = col  # zero-click default: new custom field named after itself
     return mapping
+
+
+def validate_custom_field_name(name: str, reserved_names: List[str]) -> Optional[str]:
+    """Returns an error message, or None if the name is valid. Rejects a
+    blank name and rejects (case-insensitively) any name colliding with
+    a reserved system column — a custom field with the same name would
+    silently corrupt real tracking data (Status, IntroSentAt, etc.) on
+    the next import."""
+    if not name or not name.strip():
+        return "Field name is required."
+    if name.strip().lower() in {r.lower() for r in reserved_names}:
+        return f"'{name.strip()}' is a reserved system column name — choose a different field name."
+    return None
+
+
+def find_duplicate_columns(columns: List[str]) -> List[str]:
+    """Names appearing more than once in a CSV header. Python's own
+    csv.DictReader keeps every duplicate-named column in fieldnames, but
+    silently keeps only the LAST one's value per row when building each
+    row's dict — the earlier column's data is already gone before this
+    application ever sees it. This can only flag the collision for the
+    user to fix in their source file; the data loss itself already
+    happened during parsing and can't be recovered here."""
+    seen = set()
+    duplicates = set()
+    for col in columns:
+        if col in seen:
+            duplicates.add(col)
+        seen.add(col)
+    return sorted(duplicates)
+
+
+def build_full_lead_table(leads: List[Dict], header_order: Optional[List[str]] = None) -> Dict[str, List]:
+    """Builds a display table covering every field present across the
+    leads — not a fixed, hardcoded subset — so a custom column brought in
+    via CSV import (Client, Product, Content Score, ...) is visible here
+    just like any built-in field. Ordered to match the Sheet's own actual
+    header when available (header_order), falling back to alphabetical
+    for anything not in that header. Excludes the internal "_row"
+    bookkeeping field — never meant for display."""
+    all_fields = set()
+    for lead in leads:
+        all_fields.update(k for k in lead.keys() if k != "_row")
+
+    if header_order:
+        ordered = [f for f in header_order if f in all_fields]
+        ordered += sorted(all_fields - set(header_order))
+    else:
+        ordered = sorted(all_fields)
+
+    table = {field: [lead.get(field, "") for lead in leads] for field in ordered}
+    return table
 
 
 def apply_mapping(rows: List[Dict[str, str]], mapping: Dict[str, str]) -> List[Dict[str, str]]:
