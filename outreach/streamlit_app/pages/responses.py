@@ -127,7 +127,7 @@ if pending_sync_keys:
         for campaign_for_sync, response_ids in grouped.items():
             try:
                 payload = build_mark_read_payload(response_ids)
-                path = f"mark_read/{campaign_for_sync}/{time.strftime('%Y-%m-%d-%H%M%S')}.json"
+                path = f"outreach/mark_read/{campaign_for_sync}/{time.strftime('%Y-%m-%d-%H%M%S')}.json"
                 client.create_file(
                     path, payload_to_bytes(payload),
                     message=f"Mark {len(response_ids)} response(s) read in {campaign_for_sync} "
