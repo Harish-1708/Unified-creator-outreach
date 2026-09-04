@@ -53,7 +53,7 @@ def build_variant_edit_file(campaign_name: str, stage_prefix: str, variant: str,
     small function so this module doesn't need to import campaign_builder
     just for one line."""
     content = f"Subject: {subject.strip()}\n\n{body.strip()}\n".encode("utf-8")
-    return {"path": f"templates/{campaign_name}/{stage_prefix}_{variant}.txt", "content": content}
+    return {"path": f"outreach/templates/{campaign_name}/{stage_prefix}_{variant}.txt", "content": content}
 
 
 def build_new_variant_files_for_all_stages(campaign_name: str, stages: List[Dict], new_variant: str,
@@ -119,7 +119,7 @@ def build_stage_deletion_paths(campaign_name: str, stage_prefix: str, variants: 
     them must be deleted together (a stage with only some variants
     removed would violate the 'every stage offers the same variants'
     invariant just as badly as leaving the stage there half-deleted)."""
-    return [f"templates/{campaign_name}/{stage_prefix}_{v}.txt" for v in variants]
+    return [f"outreach/templates/{campaign_name}/{stage_prefix}_{v}.txt" for v in variants]
 
 
 def can_delete_variant(variants: List[str], variant: str) -> Tuple[bool, str]:
@@ -137,4 +137,4 @@ def build_variant_deletion_paths(campaign_name: str, stages: List[Dict], variant
     """One file path per stage, all for this one variant letter — deleted
     together so the campaign is never momentarily inconsistent (some
     stages still offering this variant, others not)."""
-    return [f"templates/{campaign_name}/{stage['template_prefix']}_{variant}.txt" for stage in stages]
+    return [f"outreach/templates/{campaign_name}/{stage['template_prefix']}_{variant}.txt" for stage in stages]
