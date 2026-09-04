@@ -23,6 +23,7 @@ Two tabs are deliberately narrower than their campaigns.py counterpart:
 """
 import os
 import sys
+import yaml
 import time
 
 import streamlit as st
@@ -57,7 +58,7 @@ from sequences_logic import (  # noqa: E402
     build_variant_deletion_paths,
 )
 from campaign_builder import (  # noqa: E402
-    validate_variant_content, build_campaign_files,
+    validate_variant_content, build_campaign_files, build_campaign_duplication_files,
     fetch_live_next_stage_for_campaign, fetch_live_campaign_files_to_delete,
     confirmation_matches_campaign_name,
 )
@@ -951,27 +952,78 @@ with tabs[2]:
 # =============================================================================
 with tabs[3]:
     if not campaign_cfg:
-        st.info(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — write its first "
-                f"email below to create it. Once created, you'll see the usual Add Variant / Add "
-                f"Follow-up Stage / Delete options here too.")
-        create_subject = st.text_input("Subject", key="ws_email_tab_create_subject")
-        create_body = st.text_area("Body", key="ws_email_tab_create_body", height=150)
-        if st.button("Create Campaign", type="primary", key="ws_email_tab_create_campaign"):
-            content_error = validate_variant_content(create_subject, create_body, is_first_stage=True)
-            if content_error:
-                st.error(content_error)
+        st.info(f"'{outreach_campaign}' doesn't exist as an outreach campaign yet — create it below.")
+        create_mode = st.radio("How", ["Start from scratch", "Duplicate an existing campaign"],
+                                key="ws_create_campaign_mode", horizontal=True)
+
+        if create_mode == "Start from scratch":
+            create_subject = st.text_input("Subject", key="ws_email_tab_create_subject")
+            create_body = st.text_area("Body", key="ws_email_tab_create_body", height=150)
+            if st.button("Create Campaign", type="primary", key="ws_email_tab_create_campaign"):
+                content_error = validate_variant_content(create_subject, create_body, is_first_stage=True)
+                if content_error:
+                    st.error(content_error)
+                else:
+                    try:
+                        files = build_campaign_files(outreach_campaign, "intro",
+                                                      {"A": {"subject": create_subject, "body": create_body}})
+                        _get_github_client().commit_campaign_files_directly(
+                            files=files,
+                            commit_message=f"Create campaign '{outreach_campaign}' (via Workspace, "
+                                           f"by {current_user()})")
+                        st.success(f"'{outreach_campaign}' created. Refresh (top of the page) to see the "
+                                   f"full Email tab.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't create campaign: {exc}")
+        else:
+            st.caption("Copies the source campaign's ENTIRE sequence (every stage, every variant) as a "
+                       "starting point — edit from there. The new campaign always starts as a draft, "
+                       "regardless of the source's status, so nothing sends until you review and launch "
+                       "it yourself.")
+            try:
+                dup_source_options = list_campaigns()
+            except Exception:  # noqa: BLE001
+                dup_source_options = []
+
+            if not dup_source_options:
+                st.caption("No existing campaigns to duplicate from yet.")
             else:
-                try:
-                    files = build_campaign_files(outreach_campaign, "intro",
-                                                  {"A": {"subject": create_subject, "body": create_body}})
-                    _get_github_client().commit_campaign_files_directly(
-                        files=files,
-                        commit_message=f"Create campaign '{outreach_campaign}' (via Workspace, "
-                                       f"by {current_user()})")
-                    st.success(f"'{outreach_campaign}' created. Refresh (top of the page) to see the "
-                               f"full Email tab.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't create campaign: {exc}")
+                source_campaign = st.selectbox("Duplicate from", dup_source_options,
+                                                key="ws_duplicate_source")
+                if st.button("Duplicate", type="primary", key="ws_duplicate_button"):
+                    try:
+                        client = _get_github_client()
+                        # Fetched live, never from a local checkout that
+                        # could lag behind a very recent commit — the
+                        # exact bug that once let a duplicate be created
+                        # with zero template files (see
+                        # build_campaign_duplication_files's own
+                        # docstring for the full reasoning).
+                        source_filenames = client.list_directory_files(f"outreach/templates/{source_campaign}")
+                        source_files = {}
+                        for filename in source_filenames:
+                            content = client.get_file_content(
+                                f"outreach/templates/{source_campaign}/{filename}")
+                            if content is not None:
+                                source_files[filename] = content.encode("utf-8")
+
+                        override_content = client.get_file_content(
+                            f"outreach/config/campaigns/{source_campaign}.yaml")
+                        source_override = yaml.safe_load(override_content) if override_content else {}
+
+                        files = build_campaign_duplication_files(source_files, source_override,
+                                                                  outreach_campaign)
+                        client.commit_campaign_files_directly(
+                            files=files,
+                            commit_message=f"Duplicate '{source_campaign}' as '{outreach_campaign}' "
+                                           f"(via Workspace, by {current_user()})")
+                        st.success(f"'{outreach_campaign}' created from '{source_campaign}' "
+                                   f"({len(source_files)} template file(s) copied) — as a draft. "
+                                   f"Refresh (top of the page) to see it.")
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't duplicate campaign: {exc}")
     else:
         cname = campaign_cfg["_campaign_name"]
         try:
