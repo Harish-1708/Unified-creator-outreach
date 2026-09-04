@@ -58,12 +58,13 @@ def load_variant_content(campaign_name: str, stage_prefix: str, variant: str, te
 
 def fetch_live_template_content(client, campaign_name: str, stage_prefix: str, variant: str) -> Dict[str, str]:
     """LIVE equivalent of load_variant_content — same reasoning as
-    fetch_live_stages_and_variants above."""
+    fetch_live_stages_and_variants above. get_file_content raises
+    (rather than returning None) when the file is missing — a template
+    that's supposed to exist not being found is a genuine error, left
+    to propagate to the caller rather than swallowed here."""
     path = f"outreach/templates/{campaign_name}/{stage_prefix}_{variant}.txt"
-    content = client.get_file_content(path)
-    if content is None:
-        raise outreach.TemplateError(f"Template file not found on GitHub: {path}")
-    return outreach.parse_template_content(content, source_description=f"Template {path}")
+    content_bytes = client.get_file_content(path)
+    return outreach.parse_template_content(content_bytes.decode("utf-8"), source_description=f"Template {path}")
 
 
 def next_available_variant_letter(existing_variants: List[str]) -> Optional[str]:
