@@ -61,46 +61,66 @@ def validate_variant_content(subject: str, body: str, is_first_stage: bool = Tru
     return None
 
 
-def build_campaign_duplication_files(source_files: Dict[str, bytes], source_override: Optional[Dict],
-                                      new_campaign_name: str) -> List[Dict]:
-    """Pure — takes ALREADY-FETCHED source content (never reads a
-    filesystem or calls GitHub itself) and returns the file list to
-    commit for the new, duplicated campaign.
+def build_duplicated_config_override(raw_override: Dict) -> Dict:
+    """Everything from the source campaign's settings carries over
+    (sending limits, schedule, sender rotation, Asana sync settings)
+    EXCEPT status, which always resets to 'draft' — a fresh duplicate
+    with zero leads yet shouldn't inherit a Running or Paused state it
+    was never actually launched into. You decide when to launch it,
+    same as any brand-new campaign."""
+    updated = dict(raw_override)
+    updated["status"] = "draft"
+    return updated
 
-    Raises ValueError if source_files is empty — a duplicate is NEVER
-    silently created with zero template files. This is the actual fix
-    for the real bug: the original version of this feature read the
-    source campaign from a local git checkout that could lag behind a
-    very recent commit, and had no check for an empty result — it
-    proceeded straight to a "success" message with an empty campaign
-    folder. Fetching the source live (see fetch_campaign_files_for_duplication
-    in sequences_logic.py) and validating non-empty HERE, in a pure
-    function with no I/O of its own, means this check can never be
-    accidentally skipped by a future caller.
 
-    The new campaign's status is ALWAYS forced to "draft", regardless of
-    the source's status — a duplicate should never come into existence
-    already running, silently sending, before anyone has reviewed it.
-    Every other override key (sending limits, schedule, Asana settings)
-    is copied as-is; only 'status' is overridden.
-    """
-    if not source_files:
+def build_campaign_duplication_files(new_campaign_name: str, source_template_files: Dict[str, bytes],
+                                      source_raw_override: Optional[Dict]) -> List[Dict]:
+    """source_template_files: {filename: content_bytes} — MUST already be
+    fetched from the AUTHORITATIVE source (GitHubClient.list_directory_files
+    + get_file_content, reading the real, current repo state), never from
+    Streamlit's own local filesystem checkout. That checkout can lag
+    behind a very recent commit until the next redeploy finishes —
+    reading from it here previously produced a duplicate campaign with
+    ZERO template files whenever that lag happened to be in effect at
+    the exact moment of duplication, with no error raised at all. This
+    function now refuses outright rather than ever repeating that.
+
+    source_raw_override: the source campaign's config override dict, or
+    None if it never had one — a source with no override file produces
+    a duplicate with no override file either, not one that suddenly
+    exists just to carry a forced status.
+
+    Never touches the source campaign's Google Sheet — leads, sends,
+    and replies stay exactly where they are; duplicating a campaign
+    means duplicating its SETUP, not its history. The new campaign
+    starts with no Master Sheet data of its own at all, exactly like
+    any other brand-new campaign, until leads are actually imported
+    into it.
+
+    Returns [{'path':..., 'content': bytes}], ready for
+    GitHubClient.commit_campaign_files_directly.
+
+    Raises ValueError if source_template_files is empty — a duplicate
+    is never silently created with no templates in it."""
+    if not source_template_files:
         raise ValueError(
-            "The source campaign's file list came back empty — refusing to create a duplicate with "
-            "nothing in it. This usually means the source campaign name is wrong, or GitHub's API "
-            "briefly failed; it should NOT happen for a real, existing campaign."
+            "No template files were found for the source campaign — refusing to create an empty "
+            "duplicate. If this campaign clearly has templates, this was likely a transient read; "
+            "try duplicating again in a moment."
         )
 
-    files = []
-    for filename, content_bytes in source_files.items():
-        files.append({"path": f"outreach/templates/{new_campaign_name}/{filename}", "content": content_bytes})
+    files = [
+        {"path": f"outreach/templates/{new_campaign_name}/{filename}", "content": content}
+        for filename, content in sorted(source_template_files.items())
+    ]
 
-    new_override = dict(source_override or {})
-    new_override["status"] = "draft"
-    files.append({
-        "path": f"outreach/config/campaigns/{new_campaign_name}.yaml",
-        "content": yaml.safe_dump(new_override, sort_keys=False, default_flow_style=False).encode("utf-8"),
-    })
+    if source_raw_override is not None:
+        duplicated_override = build_duplicated_config_override(source_raw_override)
+        files.append({
+            "path": f"outreach/config/campaigns/{new_campaign_name}.yaml",
+            "content": yaml.safe_dump(duplicated_override, sort_keys=False,
+                                       default_flow_style=False).encode("utf-8"),
+        })
 
     return files
 
