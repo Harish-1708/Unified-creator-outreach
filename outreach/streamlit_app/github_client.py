@@ -98,6 +98,35 @@ class GitHubClient:
             raise GitHubActionsError(f"Failed to check existing file '{path}': {resp.status_code} {resp.text[:300]}")
         return resp.json().get("sha")
 
+    def list_directory_files(self, path: str, ref: str = "main") -> List[str]:
+        """Filenames (not full paths) in the directory at `path` on `ref`
+        — empty list if the directory doesn't exist (a brand-new
+        campaign that's never had anything committed yet is a normal,
+        expected case, not an error).
+
+        This is the fix for the exact class of bug that caused real,
+        permanent data corruption: reading "what template files exist"
+        from a local git checkout that can lag behind a very recent
+        commit during a Streamlit Cloud redeploy. A duplicate-then-
+        immediately-delete-stage sequence hit that lag window and wrote
+        based on an inconsistent view of which variants existed.
+        Fetching the live directory listing from GitHub's API immediately
+        before any read OR any destructive action closes that window —
+        this always reflects the actual latest commit."""
+        url = f"{GITHUB_API}/repos/{self.owner}/{self.repo}/contents/{path}"
+        resp = requests.get(url, headers=self._headers, params={"ref": ref}, timeout=self.timeout)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code != 200:
+            raise GitHubActionsError(f"Failed to list '{path}': {resp.status_code} {resp.text[:300]}")
+        entries = resp.json()
+        if not isinstance(entries, list):
+            # GitHub returns a single object (not a list) if `path` is a
+            # FILE rather than a directory — a caller mistake, not a
+            # transient error, so this is worth a clear message.
+            raise GitHubActionsError(f"'{path}' is a file, not a directory.")
+        return [entry["name"] for entry in entries if entry.get("type") == "file"]
+
     def get_file_content(self, path: str, ref: str = "main") -> Optional[str]:
         """Current LIVE content of the file at `path` on `ref` — decoded
         text, or None if it doesn't exist yet.
