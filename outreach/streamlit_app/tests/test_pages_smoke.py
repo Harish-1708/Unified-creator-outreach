@@ -536,7 +536,7 @@ def test_add_account_happy_path_writes_secret_and_mapping_and_triggers_health_ch
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", fake_dispatch):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -585,7 +585,7 @@ def test_add_account_custom_provider_fields_reach_the_secret(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", lambda self, w, i: None):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -639,7 +639,7 @@ def test_bulk_add_accounts_csv_adds_every_valid_row(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: None), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: None), \
          patch("github_client.GitHubClient.dispatch_workflow", lambda self, w, i: None):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())
@@ -793,7 +793,7 @@ def test_manage_section_edit_address_commits_updated_mapping_no_secret_write(tmp
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.set_secret", fake_set_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: "sales1:\n  slot: 1\n  address: old@gmail.com\n"), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: "sales1:\n  slot: 1\n  address: old@gmail.com\n"), \
          patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
@@ -890,7 +890,7 @@ def test_remove_uses_live_content_not_stale_local_copy(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.delete_secret", fake_delete_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: live_content), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: live_content), \
          patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
@@ -932,7 +932,7 @@ def test_manage_section_remove_deletes_secret_and_updates_mapping(tmp_path):
     with patch("config.EMAIL_ACCOUNT_SLOT_MAPPING_ABS_PATH", str(tmp_path / "config" / "email_account_slots.yaml")), \
          patch("github_client.GitHubClient.delete_secret", fake_delete_secret), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
-         patch("github_client.GitHubClient.get_file_content", lambda self, path: "sales1:\n  slot: 1\n  address: sales1@gmail.com\n"), \
+         patch("github_client.GitHubClient.get_file_content_or_none", lambda self, path: "sales1:\n  slot: 1\n  address: sales1@gmail.com\n"), \
          patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: FakeSpreadsheet({})})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
