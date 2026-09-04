@@ -78,7 +78,7 @@ def build_import_payload(mapped_rows: List[Dict[str, str]]) -> Dict:
 
 def import_payload_path(campaign_name: str, timestamp: Optional[str] = None) -> str:
     ts = timestamp or datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    return f"imports/{campaign_name}/{ts}.json"
+    return f"outreach/imports/{campaign_name}/{ts}.json"
 
 
 def build_removal_payload(lead_ids: List[str]) -> Dict:
@@ -87,7 +87,7 @@ def build_removal_payload(lead_ids: List[str]) -> Dict:
 
 def removal_payload_path(campaign_name: str, timestamp: Optional[str] = None) -> str:
     ts = timestamp or datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    return f"removals/{campaign_name}/{ts}.json"
+    return f"outreach/removals/{campaign_name}/{ts}.json"
 
 
 def payload_to_bytes(payload: Dict) -> bytes:
