@@ -157,10 +157,10 @@ def _add_account_dialog(current_mapping):
                 client = _get_github_client()
                 # Fetched LIVE from GitHub, not the page-level `current_mapping`
                 # (which can be a stale, redeploy-lagged local copy) — see
-                # get_file_content's own docstring for the exact race this
+                # get_file_content_or_none's own docstring for the exact race this
                 # closes: an action taken between commits and this app's
                 # next redeploy must never be silently overwritten.
-                fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                fresh_mapping = parse_slot_mapping(client.get_file_content_or_none(SLOT_MAPPING_PATH) or "")
                 updated_mapping = add_account_to_mapping(fresh_mapping, name.strip(), address.strip())
                 slot = updated_mapping[name.strip()]["slot"]
                 secret_payload = build_account_secret_payload(
@@ -241,7 +241,7 @@ with st.expander("📥 Bulk Add Accounts (CSV)"):
                          key="bulk_add_accounts_button"):
                 client = _get_github_client()
                 # Fetched fresh, same reasoning as the single-add site above.
-                working_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                working_mapping = parse_slot_mapping(client.get_file_content_or_none(SLOT_MAPPING_PATH) or "")
                 added_names = []
                 skipped = []
                 for row in parsed_accounts:
@@ -366,7 +366,7 @@ if manageable_names:
                     client.set_secret(f"EMAIL_ACCOUNT_SLOT_{entry['slot']}", secret_payload)
                 if new_address.strip() != entry["address"]:
                     # Fetched fresh, same reasoning as the add sites above.
-                    fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                    fresh_mapping = parse_slot_mapping(client.get_file_content_or_none(SLOT_MAPPING_PATH) or "")
                     updated_mapping = update_account_address_in_mapping(fresh_mapping, selected_name,
                                                                          new_address.strip())
                     client.create_file(
@@ -389,7 +389,7 @@ if manageable_names:
                 # sales2 then adding sales3 before redeploy caught up
                 # resurrected sales2, because the add was computed from
                 # a stale mapping that still had it.
-                fresh_mapping = parse_slot_mapping(client.get_file_content(SLOT_MAPPING_PATH) or "")
+                fresh_mapping = parse_slot_mapping(client.get_file_content_or_none(SLOT_MAPPING_PATH) or "")
                 updated_mapping = remove_account_from_mapping(fresh_mapping, selected_name)
                 client.create_file(
                     SLOT_MAPPING_PATH, serialize_slot_mapping(updated_mapping),
