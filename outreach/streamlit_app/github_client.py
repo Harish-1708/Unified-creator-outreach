@@ -184,7 +184,7 @@ class GitHubClient:
 
     def commit_campaign_files_directly(self, files: List[Dict[str, bytes]], commit_message: str,
                                         base: str = "main") -> None:
-        """files: [{'path': 'templates/Foo/intro_A.txt', 'content': b'...'}].
+        """files: [{'path': 'outreach/templates/Foo/intro_A.txt', 'content': b'...'}].
         Commits every file straight to `base`. Raises on the first failure —
         callers should treat a partial failure as "check the repo", since a
         prior file in the list may have already landed."""
