@@ -1569,6 +1569,49 @@ with tabs[5]:
                         st.error(f"Failed to trigger Send: {exc}")
 
         st.divider()
+        with st.expander("🔗 Asana Sync"):
+            try:
+                raw_for_asana = load_raw_override(cname, config.CAMPAIGNS_DIR)
+            except Exception:  # noqa: BLE001
+                raw_for_asana = {}
+            asana_cfg_current = raw_for_asana.get("asana", {})
+            asana_enabled_now = bool(asana_cfg_current.get("enabled"))
+            st.write(f"Asana sync for **{cname}**: currently " + ("✅ ON" if asana_enabled_now else "❌ OFF"))
+            st.caption("Auto-derives each lead's pipeline stage from send/reply history and keeps a "
+                       "matching Asana task in sync. Rights Secured and Declined/Dead are always "
+                       "human-set in Asana directly — sync never moves a task out of either, "
+                       "regardless of what the lead's own data says.")
+
+            asana_project_name = st.text_input("Asana project name", value=asana_cfg_current.get(
+                "project_name", cname), key="ws_asana_project_name")
+            new_asana_enabled = st.toggle("Enable Asana sync for this campaign", value=asana_enabled_now,
+                                           key="ws_asana_enabled_toggle")
+
+            if st.button("Save Asana Settings", key="ws_save_asana_settings"):
+                try:
+                    updated_override = dict(raw_for_asana)
+                    updated_override["asana"] = {"enabled": new_asana_enabled,
+                                                  "project_name": asana_project_name}
+                    client = _get_github_client()
+                    client.create_file(
+                        override_file_path(cname), override_to_yaml_bytes(updated_override),
+                        message=f"Update Asana settings for {cname} (via Workspace, by {current_user()})")
+                    st.success("Saved. May take a minute to reflect here while the app redeploys.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Couldn't save: {exc}")
+
+            if asana_enabled_now:
+                if st.button("Sync Now", type="primary", key="ws_asana_sync_now"):
+                    try:
+                        _get_github_client().dispatch_workflow(config.WORKFLOW_SYNC_ASANA,
+                                                                {"campaign": cname})
+                        st.success("Dispatched — check 'Sync Asana' in the Actions tab.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't dispatch: {exc}")
+            else:
+                st.caption("Enable and save above to unlock manual sync.")
+
+        st.divider()
         with st.expander("🗑️ Danger Zone"):
             st.subheader("Temporarily Remove")
             if st.button("Temporarily Remove Campaign", key="ws_temp_remove"):
