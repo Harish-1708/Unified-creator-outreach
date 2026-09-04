@@ -302,10 +302,10 @@ def test_total_attachment_size_bytes_empty_list():
 
 def test_reply_payload_path_format():
     path = reply_payload_path("DudeRobe", "r1", timestamp="2026-08-29-143012")
-    assert path == "replies/DudeRobe/r1-2026-08-29-143012.json"
+    assert path == "outreach/replies/DudeRobe/r1-2026-08-29-143012.json"
 
 
 def test_reply_payload_path_sanitizes_slashes_in_response_id():
     path = reply_payload_path("DudeRobe", "weird/id", timestamp="2026-08-29-143012")
-    assert "/" not in path.split("/", 2)[-1].replace("-2026-08-29-143012.json", "")
-    assert path == "replies/DudeRobe/weird_id-2026-08-29-143012.json"
+    assert "/" not in path.rsplit("/", 1)[-1].replace("-2026-08-29-143012.json", "")
+    assert path == "outreach/replies/DudeRobe/weird_id-2026-08-29-143012.json"
