@@ -148,10 +148,10 @@ def test_filter_pending_approval():
 
 def test_filter_in_progress_excludes_terminal_and_removed():
     leads = [
-        _lead(Approval="Yes", Status=""),                    # in progress
-        _lead(Approval="Yes", Status="Stopped - Replied"),    # terminal, excluded
-        _lead(Approval="Yes", Status="Removed"),              # removed, excluded
-        _lead(Approval="", Status=""),                        # not approved, excluded
+        _lead(IntroSentAt="2026-01-01 09:00:00", Status=""),                     # in progress
+        _lead(IntroSentAt="2026-01-01 09:00:00", Status="Stopped - Replied"),    # terminal, excluded
+        _lead(IntroSentAt="2026-01-01 09:00:00", Status="Removed"),              # removed, excluded
+        _lead(IntroSentAt="", Status=""),                                       # nothing sent yet, excluded
     ]
     result = filter_leads(leads, FILTER_IN_PROGRESS)
     assert len(result) == 1
