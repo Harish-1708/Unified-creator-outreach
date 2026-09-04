@@ -591,8 +591,8 @@ def _render_sequences_tab(campaign_cfg, leads):
             for stage in stages:
                 prefix = stage["template_prefix"]
                 st.markdown(f"**{stage['name']}**")
-                subject = st.text_input("Subject", key=f"newvariant_subject_{prefix}")
-                body = st.text_area("Body", key=f"newvariant_body_{prefix}", height=120)
+                subject = st.text_input("Subject", key=f"newvariant_subject_{prefix}_{next_letter}")
+                body = st.text_area("Body", key=f"newvariant_body_{prefix}_{next_letter}", height=120)
                 contents_by_stage[prefix] = {"subject": subject, "body": body}
 
             if st.button(f"Add Variant {next_letter}", type="primary"):
@@ -1303,13 +1303,20 @@ def _render_campaign_detail(campaign_name: str, just_arrived: bool):
     is_draft = (campaign_cfg.get("status") or "active") == "draft"
     if is_draft:
         st.info("📝 Draft — this campaign hasn't been launched yet.")
-        leads, responses, send_log, error_log = [], [], [], []
-    else:
-        try:
-            leads, responses, send_log, error_log = _fetch_full_campaign_data_cached(campaign_name)
-        except Exception as exc:  # noqa: BLE001
+    try:
+        leads, responses, send_log, error_log = _fetch_full_campaign_data_cached(campaign_name)
+    except Exception as exc:  # noqa: BLE001
+        # A brand-new campaign (draft, never touched) may not have a
+        # Sheet tab at all yet — that's expected and shouldn't show a
+        # scary warning. Anything else (a draft WITH real data that
+        # fails to load for a genuine reason) still surfaces the error —
+        # "is this campaign launched" and "does this campaign have data"
+        # are independent facts, and a draft with real leads (e.g. one
+        # auto-created by pushing an approved creator into it) must
+        # still show that data, not silently hide it.
+        if not is_draft:
             st.warning(f"Couldn't load Sheet data yet: {exc}")
-            leads, responses, send_log, error_log = [], [], [], []
+        leads, responses, send_log, error_log = [], [], [], []
 
     _render_status_controls(campaign_cfg, leads, just_arrived)
     st.divider()
