@@ -1504,6 +1504,66 @@ def test_sequences_tab_add_variant_validates_across_all_stages(tmp_path):
     assert "Subject is required" in error_texts or "Body is required" in error_texts
 
 
+def test_add_variant_widget_keys_differ_by_variant_letter():
+    """The actual bug: Subject/Body widget keys for 'Add Variant' were
+    keyed by stage prefix ALONE (key=f"newvariant_subject_{prefix}"),
+    with no dependency on which letter was being added. Streamlit
+    persists widget state by key across reruns — so after adding Variant
+    B with real content, a later 'Add Variant C' render reused the exact
+    same key and opened pre-filled with B's leftover text instead of
+    blank. Proven here by confirming the SAME stage's widget key
+    genuinely differs depending on which letter is next (B vs C) — if it
+    didn't, Streamlit would conflate their session_state entries."""
+    fake_ws = {
+        "PartialSeqCampaign Master Sheet": FakeWorksheet([], header=["LeadID", "Email", "Approval"]),
+        "PartialSeqCampaign Response Sheet": FakeWorksheet([]),
+        "PartialSeqCampaign Custom Log Sheet": FakeWorksheet([]),
+        "PartialSeqCampaign Error Log": FakeWorksheet([]),
+    }
+    fake_spreadsheet = FakeSpreadsheet(fake_ws)
+
+    def _render_and_get_subject_key(tmp_path_inner):
+        with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
+             patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+             patch("config.TEMPLATES_ROOT", str(tmp_path_inner)):
+            at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
+            at.secrets.update(_dashboard_secrets())
+            for k, v in _authed_session().items():
+                at.session_state[k] = v
+            at.session_state["selected_campaign"] = "PartialSeqCampaign"
+            at.run(timeout=15)
+        assert list(at.exception) == []
+        subject_inputs = [ti for ti in at.text_input if ti.label == "Subject" and ti.key
+                          and ti.key.startswith("newvariant_subject_")]
+        assert subject_inputs, "Expected an 'Add Variant' Subject input to be present"
+        return subject_inputs[0].key
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp1:
+        campaign_dir = os.path.join(tmp1, "PartialSeqCampaign")
+        os.makedirs(campaign_dir)
+        with open(os.path.join(campaign_dir, "intro_A.txt"), "w") as f:
+            f.write("Subject: Intro A\n\nBody A")
+        key_for_next_letter_b = _render_and_get_subject_key(tmp1)
+
+    with tempfile.TemporaryDirectory() as tmp2:
+        campaign_dir = os.path.join(tmp2, "PartialSeqCampaign")
+        os.makedirs(campaign_dir)
+        with open(os.path.join(campaign_dir, "intro_A.txt"), "w") as f:
+            f.write("Subject: Intro A\n\nBody A")
+        with open(os.path.join(campaign_dir, "intro_B.txt"), "w") as f:
+            f.write("Subject: Intro B\n\nBody B")
+        key_for_next_letter_c = _render_and_get_subject_key(tmp2)
+
+    assert key_for_next_letter_b != key_for_next_letter_c, (
+        f"Widget keys for different next-variant-letters were IDENTICAL "
+        f"({key_for_next_letter_b!r}) — this is exactly the bug: Streamlit would carry over "
+        f"leftover content from one variant's form into the next one's."
+    )
+    assert "_B" in key_for_next_letter_b or key_for_next_letter_b.endswith("B")
+    assert "_C" in key_for_next_letter_c or key_for_next_letter_c.endswith("C")
+
+
 def test_settings_tab_renders_current_values_from_config():
     fake_spreadsheet = FakeSpreadsheet(_campaigns_page_fake_ws())
 
@@ -2332,6 +2392,46 @@ def test_send_tab_send_batch_dispatches_with_correct_inputs_when_confirmed():
     assert captured["workflow"] == "send_batch.yml"
     assert captured["inputs"]["campaign"] == "Kelson_Creators_Licensing"
     assert at.session_state["last_send_run_id"] == 42
+
+
+def test_draft_campaign_with_real_leads_still_shows_them():
+    """The actual bug: a Draft campaign used to hardcode leads=[] and
+    NEVER attempt the live fetch, conflating 'not launched yet' with
+    'has no data' — two independent facts. This matters concretely for
+    this system: any campaign auto-created via Push to Outreach starts
+    as a draft, and a creator pushed into it IS real data that must
+    show up immediately, not disappear until the campaign is launched."""
+    fake_ws = {
+        "DraftCampaign Master Sheet": FakeWorksheet(
+            [{"Email": "creator@example.com", "FirstName": "Josh", "Approval": ""}]
+        ),
+        "DraftCampaign Response Sheet": FakeWorksheet([]),
+        "DraftCampaign Custom Log Sheet": FakeWorksheet([]),
+        "DraftCampaign Error Log": FakeWorksheet([]),
+    }
+    fake_spreadsheet = FakeSpreadsheet(fake_ws)
+
+    with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         patch("outreach.get_campaign", _fake_get_campaign_with_status("draft")):
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
+        at.secrets.update(_dashboard_secrets())
+        for k, v in _authed_session().items():
+            at.session_state[k] = v
+        at.session_state["selected_campaign"] = "DraftCampaign"
+        at.run(timeout=15)
+
+    assert list(at.exception) == []
+    info_texts = " ".join(i.value for i in at.info)
+    assert "Draft" in info_texts  # the banner still shows
+    # The real lead must actually appear somewhere in the rendered page,
+    # not be silently hidden because the campaign hasn't launched yet.
+    all_text = " ".join(str(getattr(el, "value", "")) for el in at.get("markdown")) + " " + \
+               " ".join(str(getattr(el, "value", "")) for el in at.dataframe)
+    assert "creator@example.com" in all_text or "Josh" in all_text, (
+        "Real lead data for a Draft campaign was not found rendered anywhere on the page — "
+        "this means Draft is still hardcoding leads to empty instead of fetching them live."
+    )
 
 
 def test_send_section_hidden_when_campaign_is_draft():
