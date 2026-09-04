@@ -5,12 +5,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
+import yaml
 import outreach  # noqa: E402
 from campaign_builder import (
     validate_campaign_name, validate_variant_content, build_template_file_content,
     build_campaign_files, get_next_stage_for_campaign, commit_message_for_campaign,
     confirmation_matches_campaign_name, list_campaign_files_to_delete,
     fetch_live_next_stage_for_campaign, fetch_live_campaign_files_to_delete,
+    build_campaign_duplication_files,
 )
 
 TEMPLATES_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
@@ -328,3 +330,69 @@ def test_fetch_live_campaign_files_to_delete_ignores_non_txt_files():
     client = _FakeClient(files=["intro_A.txt", "readme.md"])
     paths = fetch_live_campaign_files_to_delete(client, "DudeRobe")
     assert "outreach/templates/DudeRobe/readme.md" not in paths
+
+
+# ---------- build_campaign_duplication_files ----------
+
+def test_build_campaign_duplication_files_raises_on_empty_source():
+    """The actual fix for the real bug: a duplicate must NEVER be
+    silently created with zero template files."""
+    with pytest.raises(ValueError, match="empty"):
+        build_campaign_duplication_files({}, {}, "NewCampaign")
+
+
+def test_build_campaign_duplication_files_copies_every_source_file():
+    source = {"intro_A.txt": b"Subject: Hi\n\nBody A", "intro_B.txt": b"Subject: Hi B\n\nBody B"}
+    files = build_campaign_duplication_files(source, {}, "NewCampaign")
+    template_files = [f for f in files if "templates/" in f["path"]]
+    assert len(template_files) == 2
+    paths = {f["path"] for f in template_files}
+    assert "outreach/templates/NewCampaign/intro_A.txt" in paths
+    assert "outreach/templates/NewCampaign/intro_B.txt" in paths
+
+
+def test_build_campaign_duplication_files_preserves_content_byte_for_byte():
+    source = {"intro_A.txt": b"Subject: Exact content\n\nMust not change"}
+    files = build_campaign_duplication_files(source, {}, "NewCampaign")
+    template_file = next(f for f in files if "templates/" in f["path"])
+    assert template_file["content"] == b"Subject: Exact content\n\nMust not change"
+
+
+def test_build_campaign_duplication_files_forces_draft_status():
+    """A duplicate must never come into existence already running,
+    silently sending, before anyone has reviewed it — regardless of
+    what the source campaign's status was."""
+    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
+    files = build_campaign_duplication_files(source, {"status": "active"}, "NewCampaign")
+    override_file = next(f for f in files if f["path"].endswith(".yaml"))
+    written = yaml.safe_load(override_file["content"].decode("utf-8"))
+    assert written["status"] == "draft"
+
+
+def test_build_campaign_duplication_files_preserves_other_override_keys():
+    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
+    source_override = {"status": "active", "sending": {"daily_limit": 50}, "schedule": {"timezone": "UTC"}}
+    files = build_campaign_duplication_files(source, source_override, "NewCampaign")
+    override_file = next(f for f in files if f["path"].endswith(".yaml"))
+    written = yaml.safe_load(override_file["content"].decode("utf-8"))
+    assert written["sending"] == {"daily_limit": 50}
+    assert written["schedule"] == {"timezone": "UTC"}
+    assert written["status"] == "draft"  # only this key changed
+
+
+def test_build_campaign_duplication_files_handles_missing_source_override():
+    """A source campaign with no override file at all (running purely on
+    auto-discovered defaults) must still produce a valid duplicate —
+    with just status: draft, nothing else."""
+    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
+    files = build_campaign_duplication_files(source, None, "NewCampaign")
+    override_file = next(f for f in files if f["path"].endswith(".yaml"))
+    written = yaml.safe_load(override_file["content"].decode("utf-8"))
+    assert written == {"status": "draft"}
+
+
+def test_build_campaign_duplication_files_uses_correct_github_path_for_override():
+    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
+    files = build_campaign_duplication_files(source, {}, "NewCampaign")
+    override_file = next(f for f in files if f["path"].endswith(".yaml"))
+    assert override_file["path"] == "outreach/config/campaigns/NewCampaign.yaml"
