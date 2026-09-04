@@ -82,12 +82,6 @@ if not login_gate():
     st.stop()
 
 st.title("🧭 Workspace")
-st.caption(
-    "One page, one set of tabs — Creator Research, Campaigns, Email, Schedule, Settings, "
-    "Responses, DM Drafting. Every write action here calls the exact same tested logic "
-    "campaigns.py's own tabs use; this doesn't rebuild that logic, just gives it a second, "
-    "unified front door."
-)
 
 
 def _get_github_client() -> GitHubClient:
@@ -383,6 +377,12 @@ except Exception:  # noqa: BLE001
     # the Email/Schedule/Settings/Responses tabs below each show their own
     # clear "doesn't exist yet" message rather than repeating one here.
     campaign_cfg = None
+
+if campaign_cfg:
+    campaign_status, campaign_problems = compute_campaign_status(campaign_cfg, leads_for_campaign)
+    st.subheader(status_label(campaign_status))
+    if campaign_problems:
+        st.caption("⚠️ " + " · ".join(campaign_problems))
 
 tab_names = ["📈 Analytics", "🔎 Creator Research", "📊 Data", "✉️ Email", "📅 Schedule", "⚙️ Settings",
              "💬 Responses", "📱 DM Drafting"]
@@ -1396,39 +1396,40 @@ with tabs[5]:
     else:
         cname = campaign_cfg["_campaign_name"]
         sending = campaign_cfg.get("sending", {})
-        status, problems = compute_campaign_status(campaign_cfg, leads_for_campaign)
+        # Already computed once, near the top of the page, right after
+        # the title — shown there so campaign status is visible
+        # regardless of which tab you're on, not buried inside Settings.
+        # Aliased here rather than recomputed so every reference below
+        # (Launch/Pause/Resume, the Send tab's readiness check) needs no
+        # changes at all.
+        status, problems = campaign_status, campaign_problems
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.subheader(status_label(status))
-            if problems:
-                st.caption("⚠️ " + " · ".join(problems))
-        with col2:
-            if status == STATUS_DRAFT:
-                if st.button("🚀 Launch", key="ws_launch"):
-                    st.session_state["ws_launch_confirm"] = True
-            elif status in (STATUS_RUNNING, STATUS_ATTENTION):
-                if st.button("⏸ Pause", key="ws_pause"):
-                    try:
-                        raw = load_raw_override(cname, config.CAMPAIGNS_DIR)
-                        updated = build_status_override(raw, "paused")
-                        _get_github_client().create_file(
-                            override_file_path(cname), override_to_yaml_bytes(updated),
-                            message=f"Set status=paused for {cname} (via Workspace, by {current_user()})")
-                        st.success("Paused.")
-                    except GitHubActionsError as exc:
-                        st.error(f"Failed: {exc}")
-            elif status == STATUS_PAUSED:
-                if st.button("▶ Resume", key="ws_resume"):
-                    try:
-                        raw = load_raw_override(cname, config.CAMPAIGNS_DIR)
-                        updated = build_status_override(raw, "active")
-                        _get_github_client().create_file(
-                            override_file_path(cname), override_to_yaml_bytes(updated),
-                            message=f"Set status=active for {cname} (via Workspace, by {current_user()})")
-                        st.success("Resumed.")
-                    except GitHubActionsError as exc:
-                        st.error(f"Failed: {exc}")
+        st.subheader("Campaign Controls")
+        if status == STATUS_DRAFT:
+            if st.button("🚀 Launch", key="ws_launch"):
+                st.session_state["ws_launch_confirm"] = True
+        elif status in (STATUS_RUNNING, STATUS_ATTENTION):
+            if st.button("⏸ Pause", key="ws_pause"):
+                try:
+                    raw = load_raw_override(cname, config.CAMPAIGNS_DIR)
+                    updated = build_status_override(raw, "paused")
+                    _get_github_client().create_file(
+                        override_file_path(cname), override_to_yaml_bytes(updated),
+                        message=f"Set status=paused for {cname} (via Workspace, by {current_user()})")
+                    st.success("Paused.")
+                except GitHubActionsError as exc:
+                    st.error(f"Failed: {exc}")
+        elif status == STATUS_PAUSED:
+            if st.button("▶ Resume", key="ws_resume"):
+                try:
+                    raw = load_raw_override(cname, config.CAMPAIGNS_DIR)
+                    updated = build_status_override(raw, "active")
+                    _get_github_client().create_file(
+                        override_file_path(cname), override_to_yaml_bytes(updated),
+                        message=f"Set status=active for {cname} (via Workspace, by {current_user()})")
+                    st.success("Resumed.")
+                except GitHubActionsError as exc:
+                    st.error(f"Failed: {exc}")
 
         if status == STATUS_DRAFT and st.session_state.get("ws_launch_confirm"):
             ready, launch_problems = compute_campaign_readiness(campaign_cfg, leads_for_campaign)
@@ -1507,32 +1508,6 @@ with tabs[5]:
                     st.error(f"Save failed: {exc}")
 
         st.divider()
-        st.subheader("Sync Shortlist")
-        st.caption(
-            "A saved review decision updates Master immediately, but doesn't reach the Shortlist "
-            "tab until this runs. Safe to run any time; only ever adds newly-approved rows."
-        )
-        if HAS_DISCOVERY and st.button("Run Sync Shortlist Now", key="ws_sync_shortlist"):
-            try:
-                _get_github_client().dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
-                st.success("Dispatched.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Couldn't dispatch: {exc}")
-
-        st.divider()
-        with st.expander("🔧 Maintenance: Backfill ThreadSubject"):
-            st.caption("For leads already mid-sequence before ThreadSubject existed. Safe to re-run.")
-            dry_run_bf = st.checkbox("Dry run", value=True, key="ws_backfill_dry_run")
-            if st.button("Run Backfill", key="ws_run_backfill"):
-                try:
-                    client = _get_github_client()
-                    inputs = build_backfill_thread_subject_inputs(cname, dry_run=dry_run_bf)
-                    client.dispatch_workflow(config.WORKFLOW_BACKFILL_THREAD_SUBJECT, inputs)
-                    st.success("Triggered.")
-                except GitHubActionsError as exc:
-                    st.error(f"Failed: {exc}")
-
-        st.divider()
         st.subheader("Send")
         if status != STATUS_RUNNING:
             reason = {
@@ -1561,6 +1536,19 @@ with tabs[5]:
                         st.success(f"Triggered Send for '{cname}' / stage '{stage_s}'.")
                     except GitHubActionsError as exc:
                         st.error(f"Failed to trigger Send: {exc}")
+
+        st.divider()
+        with st.expander("🔄 Sync Shortlist"):
+            st.caption(
+                "A saved review decision updates Master immediately, but doesn't reach the Shortlist "
+                "tab until this runs. Safe to run any time; only ever adds newly-approved rows."
+            )
+            if HAS_DISCOVERY and st.button("Run Sync Shortlist Now", key="ws_sync_shortlist"):
+                try:
+                    _get_github_client().dispatch_workflow(config.WORKFLOW_SYNC_SHORTLIST, {})
+                    st.success("Dispatched.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Couldn't dispatch: {exc}")
 
         st.divider()
         try:
@@ -1608,6 +1596,19 @@ with tabs[5]:
                         st.error(f"Failed to trigger sync: {exc}")
             else:
                 st.caption("Enable and save first to sync.")
+
+        st.divider()
+        with st.expander("🔧 Maintenance: Backfill ThreadSubject"):
+            st.caption("For leads already mid-sequence before ThreadSubject existed. Safe to re-run.")
+            dry_run_bf = st.checkbox("Dry run", value=True, key="ws_backfill_dry_run")
+            if st.button("Run Backfill", key="ws_run_backfill"):
+                try:
+                    client = _get_github_client()
+                    inputs = build_backfill_thread_subject_inputs(cname, dry_run=dry_run_bf)
+                    client.dispatch_workflow(config.WORKFLOW_BACKFILL_THREAD_SUBJECT, inputs)
+                    st.success("Triggered.")
+                except GitHubActionsError as exc:
+                    st.error(f"Failed: {exc}")
 
         st.divider()
         with st.expander("🗑️ Danger Zone"):
