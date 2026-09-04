@@ -64,6 +64,15 @@ def build_updated_override(raw_override: Dict, daily_limit: int, per_account_dai
     return updated
 
 
+def build_asana_settings_override(raw_override: Dict, enabled: bool, project_name: str) -> Dict:
+    """Returns a NEW dict — never mutates raw_override. Only the 'asana'
+    key is touched; everything else passes through untouched, same
+    guarantee build_updated_override makes for 'sending'."""
+    updated = dict(raw_override)
+    updated["asana"] = {"enabled": enabled, "project_name": project_name}
+    return updated
+
+
 def override_to_yaml_bytes(override: Dict) -> bytes:
     return yaml.safe_dump(override, sort_keys=False, default_flow_style=False).encode("utf-8")
 
