@@ -1,0 +1,39 @@
+name: Sync Asana
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Campaign name — syncs only this one. Leave blank to sync every campaign with asana.enabled: true instead."
+        required: false
+  schedule:
+    # Daily at 13:00 UTC — loops every campaign with asana.enabled: true.
+    # A manual dispatch with a specific campaign name only ever syncs
+    # that one; this scheduled trigger always runs the "sync everything
+    # enabled" path, never a single campaign.
+    - cron: "0 13 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Sync one campaign
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.campaign != ''
+        env:
+          ASANA_API_KEY: ${{ secrets.ASANA_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python outreach.py sync-asana --campaign "${{ github.event.inputs.campaign }}"
+      - name: Sync every enabled campaign
+        if: github.event_name == 'schedule' || github.event.inputs.campaign == ''
+        env:
+          ASANA_API_KEY: ${{ secrets.ASANA_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python outreach.py sync-asana-all
