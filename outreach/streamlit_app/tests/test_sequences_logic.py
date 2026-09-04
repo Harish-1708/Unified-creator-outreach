@@ -238,7 +238,11 @@ class _FakeClient:
         return self._files
 
     def get_file_content(self, path):
-        return self._contents.get(path)
+        """Matches the real contract: bytes, raises when missing —
+        never returns None."""
+        if path not in self._contents:
+            raise KeyError(f"no fake content registered for {path!r}")
+        return self._contents[path]
 
 
 def test_fetch_live_stages_and_variants_uses_the_correct_github_path():
@@ -280,19 +284,22 @@ def test_fetch_live_template_content_uses_the_correct_github_path():
     class _CapturingClient(_FakeClient):
         def get_file_content(self, path):
             captured["path"] = path
-            return "Subject: Hi\n\nBody"
+            return b"Subject: Hi\n\nBody"
 
     fetch_live_template_content(_CapturingClient(), "DudeRobe", "intro", "A")
     assert captured["path"] == "outreach/templates/DudeRobe/intro_A.txt"
 
 
 def test_fetch_live_template_content_parses_correctly():
-    client = _FakeClient(contents={"outreach/templates/DudeRobe/intro_A.txt": "Subject: Hello\n\nBody text"})
+    client = _FakeClient(contents={"outreach/templates/DudeRobe/intro_A.txt": b"Subject: Hello\n\nBody text"})
     result = fetch_live_template_content(client, "DudeRobe", "intro", "A")
     assert result == {"subject": "Hello", "body": "Body text"}
 
 
 def test_fetch_live_template_content_raises_clearly_when_missing():
+    """get_file_content raises (never returns None) when the file
+    doesn't exist — a template that's supposed to exist not being found
+    is a genuine error, propagated rather than swallowed."""
     client = _FakeClient(contents={})
-    with pytest.raises(outreach.TemplateError, match="not found on GitHub"):
+    with pytest.raises(KeyError):
         fetch_live_template_content(client, "DudeRobe", "intro", "A")
