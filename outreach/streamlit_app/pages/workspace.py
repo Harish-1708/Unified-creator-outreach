@@ -1503,29 +1503,6 @@ with tabs[5]:
                 st.error(f"Couldn't dispatch: {exc}")
 
         st.divider()
-        st.subheader("⚙️ Campaign Settings (Asana Sync)")
-        if HAS_DISCOVERY and discovery_campaign:
-            all_settings = crl.load_current_settings()
-            current_asana = crl.get_asana_sync_status(all_settings, discovery_campaign)
-            st.write(f"**Asana sync for '{discovery_campaign}'**: currently "
-                     + ("✅ ON" if current_asana else "❌ OFF"))
-            st.caption("Controls BOTH Email and DM creators from this campaign.")
-            new_asana = st.toggle("Enable Asana sync for this campaign", value=current_asana,
-                                   key=f"ws_asana_toggle_{discovery_campaign}")
-            if new_asana != current_asana and st.button("Save Campaign Settings", type="primary",
-                                                          key="ws_save_asana"):
-                try:
-                    commit = crl.build_settings_commit(all_settings, discovery_campaign, new_asana)
-                    _get_github_client().commit_campaign_files_directly(
-                        files=[{"path": commit["path"], "content": commit["content"]}],
-                        commit_message=commit["commit_message"])
-                    st.success("Saved.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't save: {exc}")
-        else:
-            st.caption("Select a Discovery Campaign above to manage its Asana setting.")
-
-        st.divider()
         with st.expander("🔧 Maintenance: Backfill ThreadSubject"):
             st.caption("For leads already mid-sequence before ThreadSubject existed. Safe to re-run.")
             dry_run_bf = st.checkbox("Dry run", value=True, key="ws_backfill_dry_run")
