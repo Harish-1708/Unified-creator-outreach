@@ -69,4 +69,4 @@ def override_to_yaml_bytes(override: Dict) -> bytes:
 
 
 def override_file_path(campaign_name: str) -> str:
-    return f"config/campaigns/{campaign_name}.yaml"
+    return f"outreach/config/campaigns/{campaign_name}.yaml"
