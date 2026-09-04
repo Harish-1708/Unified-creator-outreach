@@ -424,3 +424,46 @@ def test_build_single_campaign_table_matches_filter_creator_rows_exactly():
     assert by_metric["Total DM"] == len(crl.filter_creator_rows(master, "DM"))
     assert by_metric["Total Response"] == len(crl.filter_creator_rows(master, "Response"))
     assert by_metric["Total Final"] == len(crl.filter_creator_rows(master, "Final"))
+
+
+# ---------- search_creator_rows / filter_creator_rows_by_review_status ----------
+
+def test_search_creator_rows_matches_any_field_case_insensitive():
+    rows = [{"username": "DudeDad", "contact_email": "a@abc.com"}, {"username": "other", "contact_email": "b@abc.com"}]
+    result = crl.search_creator_rows(rows, "dudedad")
+    assert len(result) == 1
+    assert result[0]["username"] == "DudeDad"
+
+
+def test_search_creator_rows_matches_partial_email():
+    rows = [{"username": "a", "contact_email": "sam@example.com"}, {"username": "b", "contact_email": "other@x.com"}]
+    result = crl.search_creator_rows(rows, "sam@")
+    assert len(result) == 1
+
+
+def test_search_creator_rows_blank_query_returns_everything_unchanged():
+    rows = [{"username": "a"}, {"username": "b"}]
+    assert crl.search_creator_rows(rows, "") == rows
+    assert crl.search_creator_rows(rows, "   ") == rows
+
+
+def test_search_creator_rows_no_match_returns_empty():
+    rows = [{"username": "a"}]
+    assert crl.search_creator_rows(rows, "zzz_no_match") == []
+
+
+def test_filter_by_review_status_all_returns_everything():
+    rows = [{"review_status": "Approved"}, {"review_status": "Rejected"}]
+    assert crl.filter_creator_rows_by_review_status(rows, "All") == rows
+
+
+def test_filter_by_review_status_matches_case_insensitively():
+    rows = [{"review_status": "Approved"}, {"review_status": "Rejected"}]
+    result = crl.filter_creator_rows_by_review_status(rows, "approved")
+    assert result == [{"review_status": "Approved"}]
+
+
+def test_filter_by_review_status_blank_status_treated_as_pending():
+    rows = [{"review_status": ""}, {"review_status": "Approved"}]
+    result = crl.filter_creator_rows_by_review_status(rows, "Pending")
+    assert result == [{"review_status": ""}]
