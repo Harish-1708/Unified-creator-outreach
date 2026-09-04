@@ -19,6 +19,7 @@ once per creator in a pasted batch, rather than this script accepting a
 batch itself — keeps this script's contract identical whether it's one
 creator or one of many.
 """
+import json
 import os
 from datetime import datetime, timezone
 
@@ -30,12 +31,21 @@ SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def build_manual_creator_dict(platform: str, username: str, campaign: str, profile_link: str = "",
                                contact_email: str = "", content_angle: str = "",
-                               review_status: str = "", outreach_channel: str = "") -> dict:
+                               review_status: str = "", outreach_channel: str = "",
+                               custom_fields: dict = None) -> dict:
     """Pure — no I/O. dedup_key follows the exact 'platform:username'
-    convention every other part of this pipeline already uses."""
+    convention every other part of this pipeline already uses.
+
+    custom_fields: {column_name: value} for any EXISTING Master column
+    beyond the fixed set above — build_row_for_header already handles an
+    arbitrary extra key correctly (any dict key matching a real header
+    column gets used, anything else in the header stays blank), so this
+    just needs to merge cleanly. Fixed fields always win on a name
+    collision — a custom field can never silently override dedup_key,
+    Campaign, or any of the other fields this function itself sets."""
     platform_clean = platform.strip().lower()
     username_clean = username.strip()
-    return {
+    base = {
         "dedup_key": f"{platform_clean}:{username_clean.lower()}",
         "platform": platform_clean,
         "username": username_clean,
@@ -49,6 +59,9 @@ def build_manual_creator_dict(platform: str, username: str, campaign: str, profi
         "discovery_method": "manual_add",
         "date_added": datetime.now(timezone.utc).date().isoformat(),
     }
+    merged = dict(custom_fields or {})
+    merged.update(base)  # fixed fields always win over a same-named custom field
+    return merged
 
 
 def find_existing_row(master_records: list, dedup_key: str, campaign: str):
@@ -83,6 +96,9 @@ def main():
     if missing:
         raise ValueError(f"Missing required input(s): {', '.join(missing)}")
 
+    custom_fields_raw = os.environ.get("CUSTOM_FIELDS_JSON", "").strip()
+    custom_fields = json.loads(custom_fields_raw) if custom_fields_raw else {}
+
     creator = build_manual_creator_dict(
         platform, username, campaign,
         profile_link=os.environ.get("PROFILE_LINK", ""),
@@ -90,6 +106,7 @@ def main():
         content_angle=os.environ.get("CONTENT_ANGLE", ""),
         review_status=os.environ.get("REVIEW_STATUS", ""),
         outreach_channel=os.environ.get("OUTREACH_CHANNEL", ""),
+        custom_fields=custom_fields,
     )
 
     creds = Credentials.from_service_account_file(
