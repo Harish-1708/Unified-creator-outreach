@@ -86,6 +86,10 @@ MASTER_COLUMNS = [
                                 # line blank to continue this same thread
                                 # ("Re: <ThreadSubject>") instead of starting a
                                 # new one — see render_email / Section 5.
+    "AsanaTaskGID",            # Set automatically the first time a lead is synced
+                                # to Asana — checked before every future sync so a
+                                # lead never gets a second task created for it.
+                                # Never edit this by hand.
 ]
 # NOTE: this is the REQUIRED prefix of the Master header row. You may add
 # extra columns of your own AFTER these (e.g. "Industry", "JobTitle") and
@@ -726,7 +730,7 @@ class SheetsConnector:
         this never assumes the second follows from the first.
         """
         header = self.master_ws.row_values(1)
-        missing = [c for c in column_names if c not in header]
+        missing = [c for c in column_names if c and c not in header]
         if not missing:
             return
 
