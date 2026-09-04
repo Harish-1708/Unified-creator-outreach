@@ -1553,18 +1553,21 @@ with tabs[5]:
                 raw_for_asana = {}
             asana_cfg_current = raw_for_asana.get("asana", {})
             asana_enabled_now = bool(asana_cfg_current.get("enabled"))
+            st.caption(
+                "Creates or updates one Asana task per lead — never a duplicate, since each lead's "
+                "task is tracked once it's first created. A lead's stage (Sourced / Outreach Sent / "
+                "Follow-up / Negotiating) is set automatically from its send/reply history; Rights "
+                "Secured and Declined / Dead are only ever set by hand in Asana and are never "
+                "overwritten by a sync."
+            )
             st.write(f"Asana sync for **{cname}**: currently " + ("✅ ON" if asana_enabled_now else "❌ OFF"))
-            st.caption("Auto-derives each lead's pipeline stage from send/reply history and keeps a "
-                       "matching Asana task in sync. Rights Secured and Declined/Dead are always "
-                       "human-set in Asana directly — sync never moves a task out of either, "
-                       "regardless of what the lead's own data says.")
 
-            asana_project_name = st.text_input("Asana project name", value=asana_cfg_current.get(
-                "project_name", cname), key="ws_asana_project_name")
             new_asana_enabled = st.toggle("Enable Asana sync for this campaign", value=asana_enabled_now,
                                            key="ws_asana_enabled_toggle")
+            asana_project_name = st.text_input("Asana project name (exact match)", value=asana_cfg_current.get(
+                "project_name", cname), key="ws_asana_project_name")
 
-            if st.button("Save Asana Settings", key="ws_save_asana_settings"):
+            if st.button("Save asana sync settings", key="ws_save_asana_settings"):
                 try:
                     updated_override = dict(raw_for_asana)
                     updated_override["asana"] = {"enabled": new_asana_enabled,
@@ -1578,7 +1581,7 @@ with tabs[5]:
                     st.error(f"Couldn't save: {exc}")
 
             if asana_enabled_now:
-                if st.button("Sync Now", type="primary", key="ws_asana_sync_now"):
+                if st.button("sync to asana now", type="primary", key="ws_asana_sync_now"):
                     try:
                         _get_github_client().dispatch_workflow(config.WORKFLOW_SYNC_ASANA,
                                                                 {"campaign": cname})
