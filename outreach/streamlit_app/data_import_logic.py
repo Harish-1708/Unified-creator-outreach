@@ -120,7 +120,7 @@ def filter_leads(leads: List[Dict], status_filter: str) -> List[Dict]:
         return [l for l in leads if l.get("Status") == "Stopped - Bounced"]
     if status_filter == FILTER_IN_PROGRESS:
         return [l for l in leads
-                if l.get("Approval") == "Yes" and not (l.get("Status") or "").startswith("Stopped")
+                if (l.get("IntroSentAt") or "").strip() and not (l.get("Status") or "").startswith("Stopped")
                 and l.get("Status") != "Removed"]
     return leads
 
