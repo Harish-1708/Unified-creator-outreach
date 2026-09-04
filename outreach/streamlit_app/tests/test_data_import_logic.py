@@ -106,7 +106,7 @@ def test_build_import_payload_shape():
 
 def test_import_payload_path_format():
     path = import_payload_path("DudeRobe", timestamp="2026-08-29-143012")
-    assert path == "imports/DudeRobe/2026-08-29-143012.json"
+    assert path == "outreach/imports/DudeRobe/2026-08-29-143012.json"
 
 
 def test_build_removal_payload_stringifies_ids():
@@ -116,7 +116,7 @@ def test_build_removal_payload_stringifies_ids():
 
 def test_removal_payload_path_format():
     path = removal_payload_path("DudeRobe", timestamp="2026-08-29-143012")
-    assert path == "removals/DudeRobe/2026-08-29-143012.json"
+    assert path == "outreach/removals/DudeRobe/2026-08-29-143012.json"
 
 
 def test_payload_to_bytes_round_trips_as_valid_json():
