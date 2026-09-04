@@ -59,11 +59,6 @@ SHORTLIST_EXTRA_HEADERS = [
     # the queue can show when a status was last touched without needing a
     # separate audit log.
     "dm_notes", "dm_last_action_at",
-    # Asana sync's own dedupe key: blank means never synced (create a new
-    # task); present means update the existing one. Shortlist-only, same
-    # reasoning as dm_notes — this is meaningless before a row is already
-    # approved and routed to a channel.
-    "asana_task_id", "asana_synced_at",
 ]
 SHORTLIST_HEADERS = SECTOR_HEADERS + SHORTLIST_EXTRA_HEADERS
 
@@ -105,13 +100,28 @@ def ensure_tab_headers(ws, required_headers: list) -> list:
     misaligned — every row has always been built from the CURRENT,
     complete SECTOR_HEADERS in order — only the header labels were stale.
     Calling this here means an existing tab now self-heals on every run,
-    the same way Master and Excluded already do."""
+    the same way Master and Excluded already do.
+
+    Also widens the sheet's own underlying GRID first if the header is
+    about to grow past it — a Sheet tab's grid size is fixed at however
+    many columns/rows it had when the tab was first created; writing a
+    header cell beyond that raises a hard 400 error from the API every
+    time, not a silent failure, and retrying the SAME write (as
+    with_backoff does) can never succeed since the grid never grows on
+    its own. This is the actual fix for a live incident: a Shortlist tab
+    created long before SECTOR_HEADERS grew past 64 columns kept
+    crashing on every single sync attempt, and no amount of retrying
+    fixed it, because the header CONTENT was correct but the grid had no
+    room left to write it into."""
     actual = with_backoff(ws.row_values, 1)
     if not actual:
         with_backoff(ws.append_row, required_headers)
         return list(required_headers)
     missing = [h for h in required_headers if h not in actual]
     if missing:
+        needed_col_count = len(actual) + len(missing)
+        if ws.col_count < needed_col_count:
+            with_backoff(ws.resize, cols=needed_col_count + 10)
         start_col = len(actual) + 1
         start_a1 = gspread.utils.rowcol_to_a1(1, start_col)
         with_backoff(ws.update, start_a1, [missing])
