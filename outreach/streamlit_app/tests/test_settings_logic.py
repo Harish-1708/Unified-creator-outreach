@@ -119,7 +119,7 @@ def test_override_to_yaml_bytes_round_trips():
 
 
 def test_override_file_path_format():
-    assert override_file_path("DudeRobe") == "config/campaigns/DudeRobe.yaml"
+    assert override_file_path("DudeRobe") == "outreach/config/campaigns/DudeRobe.yaml"
 
 
 def test_full_round_trip_load_edit_save_reload(tmp_path):
