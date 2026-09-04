@@ -105,7 +105,7 @@ def test_build_template_file_content_blank_subject_round_trips_as_blank(tmp_path
 def test_build_campaign_files_only_includes_provided_variants():
     files = build_campaign_files("Foo", "intro", {"A": {"subject": "S", "body": "B"}})
     assert len(files) == 1
-    assert files[0]["path"] == "templates/Foo/intro_A.txt"
+    assert files[0]["path"] == "outreach/templates/Foo/intro_A.txt"
 
 
 def test_build_campaign_files_multiple_variants_in_order():
@@ -115,12 +115,12 @@ def test_build_campaign_files_multiple_variants_in_order():
     }
     files = build_campaign_files("Foo", "intro", variants)
     paths = [f["path"] for f in files]
-    assert paths == ["templates/Foo/intro_A.txt", "templates/Foo/intro_B.txt"]
+    assert paths == ["outreach/templates/Foo/intro_A.txt", "outreach/templates/Foo/intro_B.txt"]
 
 
 def test_build_campaign_files_uses_given_stage_prefix():
     files = build_campaign_files("Foo", "followup1", {"A": {"subject": "S", "body": "B"}})
-    assert files[0]["path"] == "templates/Foo/followup1_A.txt"
+    assert files[0]["path"] == "outreach/templates/Foo/followup1_A.txt"
 
 
 # ---------- get_next_stage_for_campaign — against the REAL sample campaign ----------
@@ -213,8 +213,8 @@ def test_list_campaign_files_to_delete_includes_every_template_file(tmp_path):
 
     paths = list_campaign_files_to_delete("Foo", str(tmp_path / "templates"), str(campaigns_dir))
     assert set(paths) == {
-        "templates/Foo/intro_A.txt", "templates/Foo/intro_B.txt",
-        "templates/Foo/followup1_A.txt", "templates/Foo/followup1_B.txt",
+        "outreach/templates/Foo/intro_A.txt", "outreach/templates/Foo/intro_B.txt",
+        "outreach/templates/Foo/followup1_A.txt", "outreach/templates/Foo/followup1_B.txt",
     }
 
 
@@ -228,7 +228,7 @@ def test_list_campaign_files_to_delete_includes_override_file_when_present(tmp_p
     (campaigns_dir / "Foo.yaml").write_text("sending:\n  daily_limit: 50\n")
 
     paths = list_campaign_files_to_delete("Foo", str(tmp_path / "templates"), str(campaigns_dir))
-    assert "config/campaigns/Foo.yaml" in paths
+    assert "outreach/config/campaigns/Foo.yaml" in paths
 
 
 def test_list_campaign_files_to_delete_omits_override_file_when_absent(tmp_path):
@@ -260,4 +260,4 @@ def test_list_campaign_files_to_delete_ignores_non_txt_files(tmp_path):
     campaigns_dir.mkdir(parents=True)
 
     paths = list_campaign_files_to_delete("Foo", str(tmp_path / "templates"), str(campaigns_dir))
-    assert paths == ["templates/Foo/intro_A.txt"]
+    assert paths == ["outreach/templates/Foo/intro_A.txt"]
