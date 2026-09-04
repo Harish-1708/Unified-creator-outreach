@@ -413,7 +413,8 @@ def _render_data_tab(campaign_cfg, leads):
 
                 st.caption(f"{len(rows)} row(s) detected. Map each column below (or leave as Skip).")
                 mapping = {}
-                default_mapping = build_default_mapping(columns, custom_columns)
+                default_mapping = build_default_mapping(columns, custom_columns,
+                                                          reserved_names=outreach.MASTER_COLUMNS)
                 target_options = ["-- Skip --"] + KNOWN_FIELDS + custom_columns
                 for col in columns:
                     default = default_mapping.get(col) or "-- Skip --"
