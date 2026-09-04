@@ -24,6 +24,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+import yaml
+
 CAMPAIGN_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 VARIANT_LETTERS = ["A", "B", "C", "D"]
 
@@ -57,6 +59,50 @@ def validate_variant_content(subject: str, body: str, is_first_stage: bool = Tru
     if not body or not body.strip():
         return "Body is required."
     return None
+
+
+def build_campaign_duplication_files(source_files: Dict[str, bytes], source_override: Optional[Dict],
+                                      new_campaign_name: str) -> List[Dict]:
+    """Pure — takes ALREADY-FETCHED source content (never reads a
+    filesystem or calls GitHub itself) and returns the file list to
+    commit for the new, duplicated campaign.
+
+    Raises ValueError if source_files is empty — a duplicate is NEVER
+    silently created with zero template files. This is the actual fix
+    for the real bug: the original version of this feature read the
+    source campaign from a local git checkout that could lag behind a
+    very recent commit, and had no check for an empty result — it
+    proceeded straight to a "success" message with an empty campaign
+    folder. Fetching the source live (see fetch_campaign_files_for_duplication
+    in sequences_logic.py) and validating non-empty HERE, in a pure
+    function with no I/O of its own, means this check can never be
+    accidentally skipped by a future caller.
+
+    The new campaign's status is ALWAYS forced to "draft", regardless of
+    the source's status — a duplicate should never come into existence
+    already running, silently sending, before anyone has reviewed it.
+    Every other override key (sending limits, schedule, Asana settings)
+    is copied as-is; only 'status' is overridden.
+    """
+    if not source_files:
+        raise ValueError(
+            "The source campaign's file list came back empty — refusing to create a duplicate with "
+            "nothing in it. This usually means the source campaign name is wrong, or GitHub's API "
+            "briefly failed; it should NOT happen for a real, existing campaign."
+        )
+
+    files = []
+    for filename, content_bytes in source_files.items():
+        files.append({"path": f"outreach/templates/{new_campaign_name}/{filename}", "content": content_bytes})
+
+    new_override = dict(source_override or {})
+    new_override["status"] = "draft"
+    files.append({
+        "path": f"outreach/config/campaigns/{new_campaign_name}.yaml",
+        "content": yaml.safe_dump(new_override, sort_keys=False, default_flow_style=False).encode("utf-8"),
+    })
+
+    return files
 
 
 def build_template_file_content(subject: str, body: str) -> bytes:
