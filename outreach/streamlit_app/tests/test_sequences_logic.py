@@ -43,7 +43,7 @@ def test_next_available_variant_letter_empty():
 
 def test_build_variant_edit_file_format():
     f = build_variant_edit_file("Foo", "intro", "A", "Hi {{FirstName}}", "Body text")
-    assert f["path"] == "templates/Foo/intro_A.txt"
+    assert f["path"] == "outreach/templates/Foo/intro_A.txt"
     assert f["content"] == b"Subject: Hi {{FirstName}}\n\nBody text\n"
 
 
@@ -72,7 +72,7 @@ def test_new_variant_files_cover_every_stage():
     files = build_new_variant_files_for_all_stages("Foo", stages, "E", contents)
     assert len(files) == 2
     paths = {f["path"] for f in files}
-    assert paths == {"templates/Foo/intro_E.txt", "templates/Foo/followup1_E.txt"}
+    assert paths == {"outreach/templates/Foo/intro_E.txt", "outreach/templates/Foo/followup1_E.txt"}
 
 
 def test_new_variant_files_preserves_blank_subject_for_continuation():
@@ -177,12 +177,12 @@ def test_can_delete_stage_rejects_intro_even_when_named_as_last():
 
 def test_build_stage_deletion_paths_one_per_variant():
     paths = build_stage_deletion_paths("Foo", "followup2", ["A", "B"])
-    assert paths == ["templates/Foo/followup2_A.txt", "templates/Foo/followup2_B.txt"]
+    assert paths == ["outreach/templates/Foo/followup2_A.txt", "outreach/templates/Foo/followup2_B.txt"]
 
 
 def test_build_stage_deletion_paths_single_variant():
     paths = build_stage_deletion_paths("Foo", "intro", ["A"])
-    assert paths == ["templates/Foo/intro_A.txt"]
+    assert paths == ["outreach/templates/Foo/intro_A.txt"]
 
 
 # ---------- can_delete_variant ----------
@@ -209,13 +209,13 @@ def test_build_variant_deletion_paths_one_per_stage():
     stages = [_stage("intro"), _stage("followup1"), _stage("followup2")]
     paths = build_variant_deletion_paths("Foo", stages, "B")
     assert paths == [
-        "templates/Foo/intro_B.txt",
-        "templates/Foo/followup1_B.txt",
-        "templates/Foo/followup2_B.txt",
+        "outreach/templates/Foo/intro_B.txt",
+        "outreach/templates/Foo/followup1_B.txt",
+        "outreach/templates/Foo/followup2_B.txt",
     ]
 
 
 def test_build_variant_deletion_paths_single_stage():
     stages = [_stage("intro")]
     paths = build_variant_deletion_paths("Foo", stages, "A")
-    assert paths == ["templates/Foo/intro_A.txt"]
+    assert paths == ["outreach/templates/Foo/intro_A.txt"]
