@@ -12,7 +12,7 @@ from campaign_builder import (
     build_campaign_files, get_next_stage_for_campaign, commit_message_for_campaign,
     confirmation_matches_campaign_name, list_campaign_files_to_delete,
     fetch_live_next_stage_for_campaign, fetch_live_campaign_files_to_delete,
-    build_campaign_duplication_files,
+    build_campaign_duplication_files, build_duplicated_config_override,
 )
 
 TEMPLATES_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
@@ -332,67 +332,99 @@ def test_fetch_live_campaign_files_to_delete_ignores_non_txt_files():
     assert "outreach/templates/DudeRobe/readme.md" not in paths
 
 
+# ---------- build_duplicated_config_override ----------
+
+def test_build_duplicated_config_override_resets_status_to_draft():
+    raw = {"status": "active", "sending": {"daily_limit": 100}}
+    updated = build_duplicated_config_override(raw)
+    assert updated["status"] == "draft"
+
+
+def test_build_duplicated_config_override_preserves_other_settings():
+    raw = {"status": "active", "sending": {"daily_limit": 100}, "asana": {"enabled": True, "project_name": "X"}}
+    updated = build_duplicated_config_override(raw)
+    assert updated["sending"] == {"daily_limit": 100}
+    assert updated["asana"] == {"enabled": True, "project_name": "X"}
+
+
+def test_build_duplicated_config_override_never_mutates_input():
+    raw = {"status": "active"}
+    build_duplicated_config_override(raw)
+    assert raw == {"status": "active"}
+
+
+def test_build_duplicated_config_override_paused_also_resets_to_draft():
+    updated = build_duplicated_config_override({"status": "paused"})
+    assert updated["status"] == "draft"
+
+
 # ---------- build_campaign_duplication_files ----------
+# Paths include the 'outreach/' prefix here (unlike the real,
+# unnested Email-Outreach-Automation repo) — this unified repo nests
+# outreach.py's own templates/config under outreach/, which the real
+# source doesn't need to account for. Everything else — parameter
+# order, the empty-source guard, the None-means-no-override behavior —
+# is ported verbatim.
+
+def test_build_campaign_duplication_files_copies_every_template_under_new_name():
+    source_files = {
+        "intro_A.txt": b"Subject: Hi\n\nHello there.",
+        "intro_B.txt": b"Subject: Hey\n\nHi there.",
+        "followup1_A.txt": b"Subject: \n\nFollowing up.",
+    }
+    files = build_campaign_duplication_files("Bar", source_files, source_raw_override=None)
+
+    paths = {f["path"] for f in files}
+    assert paths == {
+        "outreach/templates/Bar/intro_A.txt", "outreach/templates/Bar/intro_B.txt",
+        "outreach/templates/Bar/followup1_A.txt",
+    }
+
+
+def test_build_campaign_duplication_files_content_matches_source_exactly():
+    source_files = {"intro_A.txt": b"Subject: Hi\n\nHello there, {{FirstName}}."}
+    files = build_campaign_duplication_files("Bar", source_files, source_raw_override=None)
+
+    intro_file = next(f for f in files if f["path"] == "outreach/templates/Bar/intro_A.txt")
+    assert intro_file["content"] == b"Subject: Hi\n\nHello there, {{FirstName}}."
+
+
+def test_build_campaign_duplication_files_never_writes_under_source_name():
+    """The actual safety property the request is about — the duplicate's
+    files must never share a path with the source's, so a later delete
+    on one can never touch the other. There's no "Foo" name anywhere in
+    this call at all now — the function only ever knows the NEW name,
+    which is itself part of why this can't regress the way it did
+    before (see the real production bug this fixed: a stale local
+    filesystem read silently producing zero files, with no error)."""
+    source_files = {"intro_A.txt": b"Subject: Hi\n\nHello."}
+    files = build_campaign_duplication_files("Bar", source_files, source_raw_override=None)
+    assert all(f["path"].startswith("outreach/templates/Bar/") for f in files)
+
+
+def test_build_campaign_duplication_files_includes_config_override_with_draft_status():
+    source_files = {"intro_A.txt": b"Subject: Hi\n\nHello."}
+    raw_override = {"status": "active", "sending": {"daily_limit": 100}}
+
+    files = build_campaign_duplication_files("Bar", source_files, raw_override)
+
+    config_file = next(f for f in files if f["path"] == "outreach/config/campaigns/Bar.yaml")
+    written = yaml.safe_load(config_file["content"].decode("utf-8"))
+    assert written["status"] == "draft"
+    assert written["sending"] == {"daily_limit": 100}
+
+
+def test_build_campaign_duplication_files_no_config_override_means_none_created():
+    source_files = {"intro_A.txt": b"Subject: Hi\n\nHello."}
+    files = build_campaign_duplication_files("Bar", source_files, source_raw_override=None)
+    assert not any(f["path"].endswith(".yaml") for f in files)
+
 
 def test_build_campaign_duplication_files_raises_on_empty_source():
-    """The actual fix for the real bug: a duplicate must NEVER be
-    silently created with zero template files."""
-    with pytest.raises(ValueError, match="empty"):
-        build_campaign_duplication_files({}, {}, "NewCampaign")
-
-
-def test_build_campaign_duplication_files_copies_every_source_file():
-    source = {"intro_A.txt": b"Subject: Hi\n\nBody A", "intro_B.txt": b"Subject: Hi B\n\nBody B"}
-    files = build_campaign_duplication_files(source, {}, "NewCampaign")
-    template_files = [f for f in files if "templates/" in f["path"]]
-    assert len(template_files) == 2
-    paths = {f["path"] for f in template_files}
-    assert "outreach/templates/NewCampaign/intro_A.txt" in paths
-    assert "outreach/templates/NewCampaign/intro_B.txt" in paths
-
-
-def test_build_campaign_duplication_files_preserves_content_byte_for_byte():
-    source = {"intro_A.txt": b"Subject: Exact content\n\nMust not change"}
-    files = build_campaign_duplication_files(source, {}, "NewCampaign")
-    template_file = next(f for f in files if "templates/" in f["path"])
-    assert template_file["content"] == b"Subject: Exact content\n\nMust not change"
-
-
-def test_build_campaign_duplication_files_forces_draft_status():
-    """A duplicate must never come into existence already running,
-    silently sending, before anyone has reviewed it — regardless of
-    what the source campaign's status was."""
-    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
-    files = build_campaign_duplication_files(source, {"status": "active"}, "NewCampaign")
-    override_file = next(f for f in files if f["path"].endswith(".yaml"))
-    written = yaml.safe_load(override_file["content"].decode("utf-8"))
-    assert written["status"] == "draft"
-
-
-def test_build_campaign_duplication_files_preserves_other_override_keys():
-    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
-    source_override = {"status": "active", "sending": {"daily_limit": 50}, "schedule": {"timezone": "UTC"}}
-    files = build_campaign_duplication_files(source, source_override, "NewCampaign")
-    override_file = next(f for f in files if f["path"].endswith(".yaml"))
-    written = yaml.safe_load(override_file["content"].decode("utf-8"))
-    assert written["sending"] == {"daily_limit": 50}
-    assert written["schedule"] == {"timezone": "UTC"}
-    assert written["status"] == "draft"  # only this key changed
-
-
-def test_build_campaign_duplication_files_handles_missing_source_override():
-    """A source campaign with no override file at all (running purely on
-    auto-discovered defaults) must still produce a valid duplicate —
-    with just status: draft, nothing else."""
-    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
-    files = build_campaign_duplication_files(source, None, "NewCampaign")
-    override_file = next(f for f in files if f["path"].endswith(".yaml"))
-    written = yaml.safe_load(override_file["content"].decode("utf-8"))
-    assert written == {"status": "draft"}
-
-
-def test_build_campaign_duplication_files_uses_correct_github_path_for_override():
-    source = {"intro_A.txt": b"Subject: Hi\n\nBody"}
-    files = build_campaign_duplication_files(source, {}, "NewCampaign")
-    override_file = next(f for f in files if f["path"].endswith(".yaml"))
-    assert override_file["path"] == "outreach/config/campaigns/NewCampaign.yaml"
+    """The actual bug fix — a real duplicate that was reported: the
+    source read came back empty and a completely empty campaign got
+    silently created with a 'success' message anyway. This must now
+    raise instead, every time, regardless of why the source came back
+    empty."""
+    with pytest.raises(ValueError, match="No template files were found"):
+        build_campaign_duplication_files("Bar", {}, source_raw_override=None)
