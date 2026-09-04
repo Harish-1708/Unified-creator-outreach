@@ -63,3 +63,27 @@ def test_build_row_for_header_matches_real_header_order_not_a_hardcoded_list():
     header = ["dedup_key", "platform", "some_future_column_this_script_has_never_heard_of", "Campaign"]
     row = build_row_for_header(creator, header)
     assert row == ["instagram:dudedad", "instagram", "", "DudeRobe"]
+
+
+# ---------- custom_fields ----------
+
+def test_build_manual_creator_dict_merges_custom_fields():
+    creator = build_manual_creator_dict("instagram", "dudedad", "X", custom_fields={"Client": "DudeRobe"})
+    assert creator["Client"] == "DudeRobe"
+
+
+def test_build_manual_creator_dict_without_custom_fields_unaffected():
+    creator = build_manual_creator_dict("instagram", "dudedad", "X")
+    assert "Client" not in creator
+
+
+def test_build_manual_creator_dict_fixed_fields_always_win_collision():
+    """The real safety property: a custom field can never silently
+    override dedup_key, Campaign, or any other field this function
+    itself computes — even if someone (accidentally or otherwise) sends
+    a custom field with a colliding name."""
+    creator = build_manual_creator_dict("instagram", "dudedad", "RealCampaign",
+                                         custom_fields={"Campaign": "FAKE_OVERRIDE",
+                                                         "dedup_key": "tampered:value"})
+    assert creator["Campaign"] == "RealCampaign"
+    assert creator["dedup_key"] == "instagram:dudedad"
