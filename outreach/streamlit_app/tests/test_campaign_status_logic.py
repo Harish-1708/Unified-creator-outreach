@@ -59,10 +59,21 @@ def test_readiness_fails_with_no_stages():
     assert "No template stages found" in problems
 
 
-def test_readiness_fails_with_no_approved_leads():
-    ready, problems = compute_campaign_readiness(_cfg(), [_lead(Approval="No")])
+def test_readiness_fails_with_no_leads_with_email():
+    """Approval no longer gates readiness — a lead with Approval='No'
+    but a real email is perfectly sendable now. What actually blocks
+    readiness is having NO lead with an email at all."""
+    ready, problems = compute_campaign_readiness(_cfg(), [_lead(Email="")])
     assert ready is False
-    assert any("approved" in p for p in problems)
+    assert any("email" in p for p in problems)
+
+
+def test_readiness_passes_with_unapproved_lead_that_has_an_email():
+    """The direct positive case for the fix: Approval='No' must no
+    longer block readiness on its own."""
+    ready, problems = compute_campaign_readiness(_cfg(), [_lead(Approval="No")])
+    assert ready is True
+    assert problems == []
 
 
 def test_readiness_fails_with_approved_lead_missing_email():
@@ -95,8 +106,11 @@ def test_lead_not_finished_with_no_stages_and_not_stopped():
     assert is_lead_finished(_lead(), []) is False
 
 
-def test_campaign_not_complete_with_zero_approved_leads():
+def test_campaign_not_complete_with_zero_sendable_leads():
     assert compute_campaign_is_complete(_cfg(), []) is False
+    # Approval no longer matters — this lead is UNFINISHED (no stage sent
+    # yet), which is why it correctly keeps the campaign incomplete, not
+    # because Approval="No" excludes it from being counted at all.
     assert compute_campaign_is_complete(_cfg(), [_lead(Approval="No")]) is False
 
 
@@ -110,8 +124,21 @@ def test_campaign_not_complete_when_one_lead_still_pending():
     assert compute_campaign_is_complete(_cfg(), leads) is False
 
 
-def test_campaign_complete_ignores_unapproved_leads():
+def test_campaign_not_complete_when_unapproved_lead_is_unfinished():
+    """The real behavior change: an unapproved lead is NO LONGER excluded
+    from the completion check — if it has an email and hasn't finished,
+    it correctly keeps the campaign incomplete, same as any other
+    sendable lead would."""
     leads = [_lead(FollowUp1SentAt="2026-08-01 09:00:00"), _lead(Approval="No", IntroSentAt="")]
+    assert compute_campaign_is_complete(_cfg(), leads) is False
+
+
+def test_campaign_complete_counts_unapproved_lead_that_is_actually_finished():
+    """The positive direction of the same fix: an unapproved lead that
+    HAS finished (e.g. bounced, or sent every stage) must count toward
+    completion just like an approved one — Approval is purely
+    informational now, in both directions."""
+    leads = [_lead(Approval="No", Status="Stopped - Bounced")]
     assert compute_campaign_is_complete(_cfg(), leads) is True
 
 
