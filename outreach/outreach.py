@@ -1084,8 +1084,6 @@ def get_eligible_leads(leads: List[Dict], stages: List[Dict], stage_index: int,
     for lead in leads:
         if not (lead.get("Email") or "").strip():
             continue  # Email is mandatory
-        if lead.get("Approval") != APPROVAL_YES:
-            continue
         if lead.get("Status", "") in TERMINAL_STATUSES:
             continue
         if lead.get("ReplyStatus", "") == "Replied":
