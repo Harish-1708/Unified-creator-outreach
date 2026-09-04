@@ -2,12 +2,15 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
+import outreach  # noqa: E402
 from campaign_builder import (
     validate_campaign_name, validate_variant_content, build_template_file_content,
     build_campaign_files, get_next_stage_for_campaign, commit_message_for_campaign,
     confirmation_matches_campaign_name, list_campaign_files_to_delete,
+    fetch_live_next_stage_for_campaign, fetch_live_campaign_files_to_delete,
 )
 
 TEMPLATES_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
@@ -261,3 +264,67 @@ def test_list_campaign_files_to_delete_ignores_non_txt_files(tmp_path):
 
     paths = list_campaign_files_to_delete("Foo", str(tmp_path / "templates"), str(campaigns_dir))
     assert paths == ["outreach/templates/Foo/intro_A.txt"]
+
+
+# ---------- fetch_live_next_stage_for_campaign / fetch_live_campaign_files_to_delete ----------
+
+class _FakeClient:
+    def __init__(self, files=None, sha_map=None):
+        self._files = files or []
+        self._sha_map = sha_map or {}
+
+    def list_directory_files(self, path):
+        return self._files
+
+    def get_file_sha(self, path):
+        return self._sha_map.get(path)
+
+
+def test_fetch_live_next_stage_uses_correct_github_path():
+    captured = {}
+
+    class _CapturingClient(_FakeClient):
+        def list_directory_files(self, path):
+            captured["path"] = path
+            return ["intro_A.txt"]
+
+    fetch_live_next_stage_for_campaign(_CapturingClient(), "DudeRobe")
+    assert captured["path"] == "outreach/templates/DudeRobe"
+
+
+def test_fetch_live_next_stage_matches_local_version():
+    client = _FakeClient(files=["intro_A.txt"])
+    prefix, variants = fetch_live_next_stage_for_campaign(client, "DudeRobe")
+    assert prefix == "followup1"
+    assert variants == ["A"]
+
+
+def test_fetch_live_next_stage_returns_none_when_all_five_stages_exist():
+    all_stage_files = []
+    for prefix in outreach.CANONICAL_STAGE_ORDER:
+        all_stage_files.append(f"{prefix}_A.txt")
+    client = _FakeClient(files=all_stage_files)
+    assert fetch_live_next_stage_for_campaign(client, "DudeRobe") is None
+
+
+def test_fetch_live_campaign_files_to_delete_uses_correct_github_paths():
+    client = _FakeClient(
+        files=["intro_A.txt", "intro_B.txt"],
+        sha_map={"outreach/config/campaigns/DudeRobe.yaml": "abc123"},
+    )
+    paths = fetch_live_campaign_files_to_delete(client, "DudeRobe")
+    assert "outreach/templates/DudeRobe/intro_A.txt" in paths
+    assert "outreach/templates/DudeRobe/intro_B.txt" in paths
+    assert "outreach/config/campaigns/DudeRobe.yaml" in paths
+
+
+def test_fetch_live_campaign_files_to_delete_omits_override_when_it_does_not_exist():
+    client = _FakeClient(files=["intro_A.txt"], sha_map={})
+    paths = fetch_live_campaign_files_to_delete(client, "DudeRobe")
+    assert "outreach/config/campaigns/DudeRobe.yaml" not in paths
+
+
+def test_fetch_live_campaign_files_to_delete_ignores_non_txt_files():
+    client = _FakeClient(files=["intro_A.txt", "readme.md"])
+    paths = fetch_live_campaign_files_to_delete(client, "DudeRobe")
+    assert "outreach/templates/DudeRobe/readme.md" not in paths
