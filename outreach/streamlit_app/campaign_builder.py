@@ -76,7 +76,7 @@ def build_campaign_files(campaign_name: str, stage_prefix: str,
         if letter not in variants:
             continue
         content = build_template_file_content(variants[letter]["subject"], variants[letter]["body"])
-        files.append({"path": f"templates/{campaign_name}/{stage_prefix}_{letter}.txt", "content": content})
+        files.append({"path": f"outreach/templates/{campaign_name}/{stage_prefix}_{letter}.txt", "content": content})
     return files
 
 
@@ -139,10 +139,10 @@ def list_campaign_files_to_delete(campaign_name: str, templates_root: str, campa
     if os.path.isdir(campaign_template_dir):
         for filename in sorted(os.listdir(campaign_template_dir)):
             if filename.endswith(".txt"):
-                paths.append(f"templates/{campaign_name}/{filename}")
+                paths.append(f"outreach/templates/{campaign_name}/{filename}")
 
     override_path = os.path.join(campaigns_dir, f"{campaign_name}.yaml")
     if os.path.isfile(override_path):
-        paths.append(f"config/campaigns/{campaign_name}.yaml")
+        paths.append(f"outreach/config/campaigns/{campaign_name}.yaml")
 
     return paths
