@@ -325,10 +325,23 @@ CANONICAL_STAGE_ORDER = ["intro", "followup1", "followup2", "followup3", "follow
 ALL_VARIANT_LETTERS = ["A", "B", "C", "D"]
 
 
-def discover_stages_and_variants(templates_dir: str, stage_wait_days: Dict[str, int]) -> Tuple[List[Dict], List[str]]:
+def parse_stages_and_variants_from_filenames(filenames: List[str], stage_wait_days: Dict[str, int],
+                                              source_description: str = "") -> Tuple[List[Dict], List[str]]:
     """Auto-detects a campaign's stage sequence and variant set purely from
-    which template files exist — no YAML declaration required. Minimum is
-    1 stage + 1 variant (just intro_A.txt); maximum is 5 stages x A-D.
+    which template FILENAMES exist — no filesystem access, no YAML
+    declaration required. Minimum is 1 stage + 1 variant (just
+    intro_A.txt); maximum is 5 stages x A-D.
+
+    Pulled out of discover_stages_and_variants as a pure function so any
+    caller with a filename list — a local directory listing, or a live
+    GitHub API response — gets the exact same validation. A caller that
+    reads from a git checkout that can lag behind a very recent commit
+    (e.g. a Streamlit Cloud redeploy in progress) must never be the ONLY
+    way to run this check; that staleness is what silently corrupted a
+    real campaign in one deployment of this codebase (a stale read let a
+    Delete Stage action commit based on an inconsistent view of which
+    variants existed). Called with names fetched fresh from GitHub's API,
+    this same validation catches that inconsistency instead of missing it.
 
     Two things keep this safe rather than silently permissive:
     - Stages must be CONTIGUOUS from Intro — a gap (e.g. intro + followup2
@@ -340,15 +353,13 @@ def discover_stages_and_variants(templates_dir: str, stage_wait_days: Dict[str, 
       intentional design, so it's rejected with a clear message instead
       of silently shrinking just that stage.
     """
-    if not os.path.isdir(templates_dir):
-        raise ConfigError(f"Templates directory not found: {templates_dir}")
-
+    filename_set = set(filenames)
     stages: List[Dict] = []
     canonical_variants: Optional[List[str]] = None
+    label = source_description or "the given file list"
 
     for prefix in CANONICAL_STAGE_ORDER:
-        found_variants = [v for v in ALL_VARIANT_LETTERS
-                           if os.path.exists(os.path.join(templates_dir, f"{prefix}_{v}.txt"))]
+        found_variants = [v for v in ALL_VARIANT_LETTERS if f"{prefix}_{v}.txt" in filename_set]
         if not found_variants:
             break  # first gap — stages must be contiguous, stop here
 
@@ -363,7 +374,7 @@ def discover_stages_and_variants(templates_dir: str, stage_wait_days: Dict[str, 
             if extra:
                 problems.append(f"has extra variant(s) {extra} not present in '{stages[0]['name']}'")
             raise ConfigError(
-                f"Inconsistent variants for stage '{prefix}' in {templates_dir}: {'; '.join(problems)}. "
+                f"Inconsistent variants for stage '{prefix}' in {label}: {'; '.join(problems)}. "
                 "Every stage must offer the same variant letters — or specify 'stages' and 'variants' "
                 "explicitly together in this campaign's override file if that's genuinely intentional."
             )
@@ -375,11 +386,24 @@ def discover_stages_and_variants(templates_dir: str, stage_wait_days: Dict[str, 
 
     if not stages:
         raise ConfigError(
-            f"No template files found in {templates_dir}. Expected at least 'intro_A.txt' "
+            f"No template files found in {label}. Expected at least 'intro_A.txt' "
             "(or another variant letter)."
         )
 
     return stages, canonical_variants
+
+
+def discover_stages_and_variants(templates_dir: str, stage_wait_days: Dict[str, int]) -> Tuple[List[Dict], List[str]]:
+    """Thin filesystem wrapper around parse_stages_and_variants_from_filenames.
+    Prefer calling that directly with a live-fetched filename list (e.g.
+    from GitHub's API) wherever staleness matters — see its own
+    docstring for why. This wrapper remains for callers that only ever
+    run against a definitely-current local checkout (a GitHub Actions
+    workflow's own checkout step, never a long-lived Streamlit process)."""
+    if not os.path.isdir(templates_dir):
+        raise ConfigError(f"Templates directory not found: {templates_dir}")
+    filenames = os.listdir(templates_dir)
+    return parse_stages_and_variants_from_filenames(filenames, stage_wait_days, source_description=templates_dir)
 
 
 def get_campaign(campaign_name: str, settings_path: str = "config/settings.yaml",
@@ -830,23 +854,37 @@ class TemplateError(Exception):
     pass
 
 
-def load_template(templates_dir: str, template_prefix: str, variant: str) -> Dict[str, str]:
-    """Template file format: first line = 'Subject: ...', blank line, then body."""
-    path = os.path.join(templates_dir, f"{template_prefix}_{variant}.txt")
-    if not os.path.exists(path):
-        raise TemplateError(f"Template file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
+def parse_template_content(content: str, source_description: str = "") -> Dict[str, str]:
+    """Parses a template's raw text into {subject, body} — no filesystem
+    access. Pulled out of load_template for the same reason
+    parse_stages_and_variants_from_filenames was pulled out of
+    discover_stages_and_variants: any caller that fetches content live
+    (from GitHub's API) gets the exact same validation as a local-disk
+    read, without needing its own copy of this parsing logic.
 
+    Template format: first line = 'Subject: ...', blank line, then body."""
+    label = source_description or "template"
     if not content.startswith("Subject:"):
         raise TemplateError(
-            f"Template {path} must start with a 'Subject: ...' line, followed by a "
+            f"{label} must start with a 'Subject: ...' line, followed by a "
             "blank line and then the email body."
         )
     lines = content.split("\n")
     subject = lines[0][len("Subject:"):].strip()
     body = "\n".join(lines[1:]).lstrip("\n")
     return {"subject": subject, "body": body}
+
+
+def load_template(templates_dir: str, template_prefix: str, variant: str) -> Dict[str, str]:
+    """Thin filesystem wrapper around parse_template_content. Prefer
+    calling that directly with live-fetched content wherever staleness
+    matters — see its own docstring for why."""
+    path = os.path.join(templates_dir, f"{template_prefix}_{variant}.txt")
+    if not os.path.exists(path):
+        raise TemplateError(f"Template file not found: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return parse_template_content(content, source_description=f"Template {path}")
 
 
 def render_text(text: str, lead: Dict[str, str], missing_out: Optional[List[str]] = None) -> str:
