@@ -96,7 +96,24 @@ def get_next_stage_for_campaign(campaign_name: str, templates_root: str) -> Opti
     for prefix in outreach.CANONICAL_STAGE_ORDER:
         if prefix not in existing_prefixes:
             return prefix, variants
-    return None  # all 5 stages already exist
+    return None
+
+
+def fetch_live_next_stage_for_campaign(client, campaign_name: str) -> Optional[Tuple[str, List[str]]]:
+    """LIVE equivalent of get_next_stage_for_campaign — fetches the
+    directory listing from GitHub's API instead of the local checkout.
+    Suggesting the wrong next stage from a stale read (e.g. after a very
+    recent Delete Stage that this page hasn't caught up with yet) risks
+    creating a gap the same class of bug that corrupted a real campaign —
+    see fetch_live_stages_and_variants's own docstring."""
+    filenames = client.list_directory_files(f"outreach/templates/{campaign_name}")
+    stages, variants = outreach.parse_stages_and_variants_from_filenames(
+        filenames, stage_wait_days={}, source_description=f"campaign '{campaign_name}' (live from GitHub)")
+    existing_prefixes = [s["template_prefix"] for s in stages]
+    for prefix in outreach.CANONICAL_STAGE_ORDER:
+        if prefix not in existing_prefixes:
+            return prefix, variants
+    return None
 
 
 def commit_message_for_campaign(campaign_name: str, stage_prefix: str, variant_count: int,
@@ -144,5 +161,25 @@ def list_campaign_files_to_delete(campaign_name: str, templates_root: str, campa
     override_path = os.path.join(campaigns_dir, f"{campaign_name}.yaml")
     if os.path.isfile(override_path):
         paths.append(f"outreach/config/campaigns/{campaign_name}.yaml")
+
+    return paths
+
+
+def fetch_live_campaign_files_to_delete(client, campaign_name: str) -> List[str]:
+    """LIVE equivalent of list_campaign_files_to_delete — fetches the
+    directory listing and checks for the override file straight from
+    GitHub's API instead of the local checkout. A stale read here risks
+    MISSING a very recently added file (e.g. a variant added moments
+    ago) from the deletion list, leaving it orphaned behind after the
+    campaign is otherwise "deleted" — same staleness-during-a-narrow-
+    window risk as everywhere else in this fix."""
+    paths = []
+    for filename in client.list_directory_files(f"outreach/templates/{campaign_name}"):
+        if filename.endswith(".txt"):
+            paths.append(f"outreach/templates/{campaign_name}/{filename}")
+
+    override_path = f"outreach/config/campaigns/{campaign_name}.yaml"
+    if client.get_file_sha(override_path) is not None:
+        paths.append(override_path)
 
     return paths
