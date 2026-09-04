@@ -46,23 +46,6 @@ def get_campaign_settings(campaign: str, all_settings: dict) -> dict:
     return {**DEFAULT_SETTINGS, **all_settings.get(campaign, {})}
 
 
-def is_asana_sync_enabled(campaign: str, all_settings: dict) -> bool:
-    return bool(get_campaign_settings(campaign, all_settings).get("asana_sync", False))
-
-
-def build_updated_settings_yaml(all_settings: dict, campaign: str, asana_sync: bool) -> str:
-    """Pure function — returns the FULL new file content after updating
-    one campaign's asana_sync value, every other campaign's settings
-    preserved untouched. Deliberately returns a string rather than writing
-    a file directly: keeps this testable with no I/O at all, and keeps the
-    actual commit mechanism (a GitHubClient commit, matching outreach.py's
-    own Settings page) swappable later without touching this logic."""
-    updated = {k: dict(v) for k, v in all_settings.items()}
-    updated.setdefault(campaign, {})
-    updated[campaign]["asana_sync"] = asana_sync
-    return yaml.safe_dump(updated, sort_keys=True, default_flow_style=False)
-
-
 # ---------- Brand / Campaign registry (explicit creation, not just what's
 # already been run) ----------
 #
