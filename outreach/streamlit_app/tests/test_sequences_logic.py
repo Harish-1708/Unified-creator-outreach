@@ -1,13 +1,17 @@
 import os
 import sys
 
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sequences_logic import (
+import outreach  # noqa: E402
+from sequences_logic import (  # noqa: E402
     get_existing_stages_and_variants, load_variant_content, next_available_variant_letter,
     build_variant_edit_file, build_new_variant_files_for_all_stages, validate_new_variant_contents,
     has_content_changed, can_delete_stage, build_stage_deletion_paths, can_delete_variant,
-    build_variant_deletion_paths,
+    build_variant_deletion_paths, fetch_live_stages_and_variants, fetch_live_template_content,
 )
 
 TEMPLATES_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "templates")
@@ -219,3 +223,76 @@ def test_build_variant_deletion_paths_single_stage():
     stages = [_stage("intro")]
     paths = build_variant_deletion_paths("Foo", stages, "A")
     assert paths == ["outreach/templates/Foo/intro_A.txt"]
+
+
+# ---------- fetch_live_stages_and_variants / fetch_live_template_content ----------
+# The actual fix for the real corruption bug: these read from GitHub's API
+# live, never from the local checkout that can lag behind a recent commit.
+
+class _FakeClient:
+    def __init__(self, files=None, contents=None):
+        self._files = files or []
+        self._contents = contents or {}
+
+    def list_directory_files(self, path):
+        return self._files
+
+    def get_file_content(self, path):
+        return self._contents.get(path)
+
+
+def test_fetch_live_stages_and_variants_uses_the_correct_github_path():
+    """The exact bug this whole fix exists for: the path must include the
+    'outreach/' prefix — templates/ lives at outreach/templates/ in this
+    repo, not at the repo root."""
+    captured = {}
+
+    class _CapturingClient(_FakeClient):
+        def list_directory_files(self, path):
+            captured["path"] = path
+            return ["intro_A.txt"]
+
+    fetch_live_stages_and_variants(_CapturingClient(), "DudeRobe")
+    assert captured["path"] == "outreach/templates/DudeRobe"
+
+
+def test_fetch_live_stages_and_variants_matches_local_version_for_the_same_files():
+    """Live and local reads must agree when given the same underlying
+    data — this is a different data SOURCE, not different logic."""
+    client = _FakeClient(files=["intro_A.txt", "intro_B.txt", "followup1_A.txt", "followup1_B.txt"])
+    live_stages, live_variants = fetch_live_stages_and_variants(client, "DudeRobe")
+    assert [s["template_prefix"] for s in live_stages] == ["intro", "followup1"]
+    assert live_variants == ["A", "B"]
+
+
+def test_fetch_live_stages_and_variants_catches_inconsistency_from_live_data():
+    """The actual real-world scenario: a live listing showing an
+    inconsistent state (e.g. a Delete Stage action that landed between
+    two reads) must raise, exactly like the local version does."""
+    client = _FakeClient(files=["intro_A.txt", "intro_B.txt", "followup1_A.txt"])  # missing followup1_B
+    with pytest.raises(outreach.ConfigError, match="missing variant"):
+        fetch_live_stages_and_variants(client, "DudeRobe")
+
+
+def test_fetch_live_template_content_uses_the_correct_github_path():
+    captured = {}
+
+    class _CapturingClient(_FakeClient):
+        def get_file_content(self, path):
+            captured["path"] = path
+            return "Subject: Hi\n\nBody"
+
+    fetch_live_template_content(_CapturingClient(), "DudeRobe", "intro", "A")
+    assert captured["path"] == "outreach/templates/DudeRobe/intro_A.txt"
+
+
+def test_fetch_live_template_content_parses_correctly():
+    client = _FakeClient(contents={"outreach/templates/DudeRobe/intro_A.txt": "Subject: Hello\n\nBody text"})
+    result = fetch_live_template_content(client, "DudeRobe", "intro", "A")
+    assert result == {"subject": "Hello", "body": "Body text"}
+
+
+def test_fetch_live_template_content_raises_clearly_when_missing():
+    client = _FakeClient(contents={})
+    with pytest.raises(outreach.TemplateError, match="not found on GitHub"):
+        fetch_live_template_content(client, "DudeRobe", "intro", "A")
