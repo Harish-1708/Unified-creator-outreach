@@ -27,6 +27,9 @@ on:
       outreach_channel:
         description: "Optional — email, dm, or none"
         required: false
+      custom_fields_json:
+        description: 'Optional — JSON object of {"ExistingColumnName": "value"} for any Master column beyond the fixed set above'
+        required: false
 
 jobs:
   add:
@@ -56,6 +59,7 @@ jobs:
           CONTENT_ANGLE: ${{ github.event.inputs.content_angle }}
           REVIEW_STATUS: ${{ github.event.inputs.review_status }}
           OUTREACH_CHANNEL: ${{ github.event.inputs.outreach_channel }}
+          CUSTOM_FIELDS_JSON: ${{ github.event.inputs.custom_fields_json }}
         run: python add_manual_creator.py
       - name: Clean up service account file
         if: always()
