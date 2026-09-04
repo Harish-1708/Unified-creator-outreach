@@ -140,4 +140,4 @@ def total_attachment_size_bytes(uploaded_files: List) -> int:
 def reply_payload_path(campaign_name: str, response_id: str, timestamp: Optional[str] = None) -> str:
     ts = timestamp or datetime.now().strftime("%Y-%m-%d-%H%M%S")
     safe_response_id = str(response_id).replace("/", "_") or "unknown"
-    return f"replies/{campaign_name}/{safe_response_id}-{ts}.json"
+    return f"outreach/replies/{campaign_name}/{safe_response_id}-{ts}.json"
