@@ -187,7 +187,7 @@ def compute_lifecycle_stage(master_row: Dict, shortlist_row: Optional[Dict] = No
     return "Approved"  # an outreach_channel value that isn't email/dm/none — unexpected, not fatal
 
 
-# ---------- Campaign Settings (Asana sync toggle) ----------
+# ---------- Campaign Settings ----------
 
 # The commit path (used for the GitHub API) is repo-root-relative;
 # reading the file locally needs an actual filesystem path — the two are
@@ -307,12 +307,6 @@ def build_analytics_totals(campaign_rows: List[Dict]) -> Dict[str, int]:
     return totals
 
 
-def get_asana_sync_status(all_settings: Dict, campaign: str) -> bool:
-    """Thin pass-through to campaign_settings — kept here too so pages
-    only ever import creator_research_logic, not both modules directly."""
-    return cs.is_asana_sync_enabled(campaign, all_settings)
-
-
 def load_brand_registry() -> list:
     """Reads config/brands.yaml (explicitly-added brands with possibly
     zero campaigns yet) — thin pass-through, same reasoning as
@@ -354,17 +348,4 @@ def build_add_campaign_commit(all_settings: Dict, campaign: str, brand_name: str
         "path": "discovery/config/campaign_settings.yaml",
         "content": new_yaml.encode("utf-8"),
         "commit_message": f"Add campaign '{campaign}' under brand '{brand_name}'",
-    }
-
-
-def build_settings_commit(all_settings: Dict, campaign: str, asana_sync: bool) -> Dict[str, object]:
-    """Returns exactly what the page needs to hand to GitHubClient's
-    commit method — the file content plus a clear commit message — without
-    this logic module knowing anything about GitHubClient itself."""
-    new_yaml = cs.build_updated_settings_yaml(all_settings, campaign, asana_sync)
-    action = "Enable" if asana_sync else "Disable"
-    return {
-        "path": "discovery/config/campaign_settings.yaml",
-        "content": new_yaml.encode("utf-8"),
-        "commit_message": f"{action} Asana sync for campaign '{campaign}'",
     }
