@@ -39,6 +39,11 @@ if config.REPO_ROOT not in sys.path:
 
 from github_client import GitHubClient, GitHubActionsError  # noqa: E402
 from preview_logic import list_campaigns, get_campaign_cfg  # noqa: E402
+from data_import_logic import (  # noqa: E402
+    KNOWN_FIELDS, parse_csv_bytes, build_default_mapping, apply_mapping, validate_mapping,
+    count_valid_rows, build_import_payload, import_payload_path, payload_to_bytes,
+    validate_custom_field_name, find_duplicate_columns, build_full_lead_table,
+)
 from sheets_readonly import ReadOnlySheetsConnector  # noqa: E402
 from email_account_slots_logic import read_local_slot_mapping  # noqa: E402
 from accounts_logic import merge_account_directories  # noqa: E402
@@ -1217,6 +1222,102 @@ with tabs[3]:
                             st.error(f"Failed: {exc}")
                 else:
                     st.info(reason_s)
+
+            st.divider()
+            st.subheader("📇 Leads")
+            if leads_for_campaign:
+                lead_table = build_full_lead_table(leads_for_campaign)
+                st.dataframe(lead_table, use_container_width=True)
+            else:
+                st.caption("No leads in this campaign yet.")
+
+            with st.expander("📤 Import Leads (CSV)"):
+                st.caption(
+                    "Any CSV column that doesn't match FirstName/LastName/Email/Company defaults to a "
+                    "new custom field using its own column name — review and adjust below, or use "
+                    "'-- Skip --' for anything you don't want to bring in.")
+                uploaded_csv = st.file_uploader("CSV file", type=["csv"], key="ws_import_csv_uploader")
+                if uploaded_csv is not None:
+                    columns, rows = parse_csv_bytes(uploaded_csv.getvalue())
+                    duplicate_cols = find_duplicate_columns(columns)
+                    if duplicate_cols:
+                        st.warning(
+                            f"Duplicate column name(s) in this CSV: {', '.join(duplicate_cols)} — data "
+                            f"behind the EARLIER occurrence of each is already gone (Python's CSV reader "
+                            f"only keeps the last one per row). Rename one of them in the source file and "
+                            f"re-upload if that data matters.")
+
+                    try:
+                        client_for_live_read.get_file_content(f"outreach/config/campaigns/{cname}.yaml")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    custom_columns_known = sorted({k for lead in leads_for_campaign for k in lead.keys()
+                                                    if k not in KNOWN_FIELDS and k != "_row"})
+
+                    st.caption(f"{len(rows)} row(s) detected.")
+                    default_mapping = build_default_mapping(columns, custom_columns_known,
+                                                              reserved_names=outreach.MASTER_COLUMNS)
+                    mapping = {}
+                    new_field_names = {}
+                    for idx, col in enumerate(columns):
+                        default = default_mapping.get(col) or "-- Skip --"
+                        target_options = ["-- Skip --"] + KNOWN_FIELDS + custom_columns_known + \
+                            ["➕ New custom field..."]
+                        # If the zero-click default is a genuinely new
+                        # field (not in any existing option), show it as
+                        # the pre-filled "New custom field" choice rather
+                        # than silently falling back to index 0 (Skip).
+                        if default not in target_options:
+                            target_options = target_options[:-1] + [default, "➕ New custom field..."]
+                        default_idx = target_options.index(default) if default in target_options else 0
+                        # Keyed by POSITION and name together — a CSV with
+                        # a duplicate column name must never produce two
+                        # widgets sharing one key (Streamlit refuses that
+                        # outright); position alone guarantees uniqueness
+                        # regardless of what the duplicate-name warning
+                        # above already flagged.
+                        choice = st.selectbox(col, target_options, index=default_idx,
+                                               key=f"ws_import_map_{idx}_{col}")
+                        if choice == "➕ New custom field...":
+                            new_name = st.text_input(f"New field name for '{col}'",
+                                                      key=f"ws_import_newfield_{idx}_{col}")
+                            new_field_names[col] = new_name
+                            mapping[col] = new_name
+                        else:
+                            mapping[col] = "" if choice == "-- Skip --" else choice
+
+                    mapping_error = validate_mapping(mapping)
+                    field_name_errors = [
+                        validate_custom_field_name(name, outreach.MASTER_COLUMNS)
+                        for col, name in new_field_names.items() if name is not None
+                    ]
+                    field_name_errors = [e for e in field_name_errors if e]
+
+                    if mapping_error:
+                        st.error(mapping_error)
+                    elif field_name_errors:
+                        for err in field_name_errors:
+                            st.error(err)
+                    else:
+                        mapped_rows = apply_mapping(rows, mapping)
+                        valid_count = count_valid_rows(mapped_rows)
+                        st.write(f"**{valid_count} of {len(mapped_rows)} row(s)** have an email and will "
+                                 f"be imported (duplicates against existing leads are checked server-side).")
+                        if st.button("Import", type="primary", key="ws_import_confirm_button",
+                                     disabled=valid_count == 0):
+                            try:
+                                client = _get_github_client()
+                                payload = build_import_payload(mapped_rows)
+                                path = import_payload_path(cname)
+                                client.create_file(path, payload_to_bytes(payload),
+                                                    message=f"Import {valid_count} lead(s) for {cname} "
+                                                            f"(via Workspace, by {current_user()})")
+                                time.sleep(1)
+                                client.dispatch_workflow(config.WORKFLOW_IMPORT_LEADS,
+                                                          {"campaign": cname, "payload_path": path})
+                                st.success("Dispatched — check 'Import Leads' in the Actions tab.")
+                            except Exception as exc:  # noqa: BLE001
+                                st.error(f"Couldn't import: {exc}")
 
 # =============================================================================
 # TAB 4 — Schedule
