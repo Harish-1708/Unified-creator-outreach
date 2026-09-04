@@ -23,6 +23,7 @@ Two tabs are deliberately narrower than their campaigns.py counterpart:
 """
 import os
 import sys
+import json
 import yaml
 import time
 
@@ -39,11 +40,6 @@ if config.REPO_ROOT not in sys.path:
 
 from github_client import GitHubClient, GitHubActionsError  # noqa: E402
 from preview_logic import list_campaigns, get_campaign_cfg  # noqa: E402
-from data_import_logic import (  # noqa: E402
-    KNOWN_FIELDS, NEW_CUSTOM_FIELD_OPTION, parse_csv_bytes, build_default_mapping, apply_mapping,
-    validate_mapping, count_valid_rows, build_import_payload, import_payload_path, payload_to_bytes,
-    validate_custom_field_name, find_duplicate_columns, build_full_lead_table,
-)
 from sheets_readonly import ReadOnlySheetsConnector  # noqa: E402
 from email_account_slots_logic import read_local_slot_mapping  # noqa: E402
 from accounts_logic import merge_account_directories  # noqa: E402
@@ -648,38 +644,51 @@ with tabs[2]:
             if not rows:
                 st.caption("No rows yet.")
             else:
-                # Direct in-table selection via a checkbox column,
-                # replacing the separate multiselect below the table —
-                # select rows right where you're already looking at them.
-                # Editing is enabled ONLY on a specific, deliberate set of
-                # display fields (see edit_master_row.py's own docstring
-                # for why dedup_key and every pipeline-computed field —
-                # scores, evidence — stay locked).
-                editable_rows = [{"Select": False, **crl.reorder_priority_columns(
-                    r, ["dedup_key", "username", "contact_email"])} for r in rows]
-                data_columns = list(editable_rows[0].keys())
-                editable_field_names = {"contact_email", "username", "profile_link", "content_angle"}
-                edited_rows = st.data_editor(
-                    editable_rows,
-                    column_config={"Select": st.column_config.CheckboxColumn(required=True, pinned=True)},
-                    disabled=[c for c in data_columns if c != "Select" and c not in editable_field_names],
-                    hide_index=True,
-                    use_container_width=True,
-                    key="workspace_master_data_editor",
-                )
-                selected_keys = [r["dedup_key"] for r in edited_rows if r.get("Select") and r.get("dedup_key")]
+                search_col, filter_col = st.columns([2, 1])
+                with search_col:
+                    search_query = st.text_input("🔍 Search (any field)", key="workspace_master_search")
+                with filter_col:
+                    status_filter_choice = st.selectbox(
+                        "Review status", ["All", "Approved", "Rejected", "Pending"],
+                        key="workspace_master_status_filter")
+                rows = crl.search_creator_rows(rows, search_query)
+                rows = crl.filter_creator_rows_by_review_status(rows, status_filter_choice)
+                if not rows:
+                    st.caption("No rows match this search/filter.")
+                    selected_keys, changed_rows = [], []
+                else:
+                    # Direct in-table selection via a checkbox column,
+                    # replacing the separate multiselect below the table —
+                    # select rows right where you're already looking at them.
+                    # Editing is enabled ONLY on a specific, deliberate set of
+                    # display fields (see edit_master_row.py's own docstring
+                    # for why dedup_key and every pipeline-computed field —
+                    # scores, evidence — stay locked).
+                    editable_rows = [{"Select": False, **crl.reorder_priority_columns(
+                        r, ["dedup_key", "username", "contact_email"])} for r in rows]
+                    data_columns = list(editable_rows[0].keys())
+                    editable_field_names = {"contact_email", "username", "profile_link", "content_angle"}
+                    edited_rows = st.data_editor(
+                        editable_rows,
+                        column_config={"Select": st.column_config.CheckboxColumn(required=True, pinned=True)},
+                        disabled=[c for c in data_columns if c != "Select" and c not in editable_field_names],
+                        hide_index=True,
+                        use_container_width=True,
+                        key="workspace_master_data_editor",
+                    )
+                    selected_keys = [r["dedup_key"] for r in edited_rows if r.get("Select") and r.get("dedup_key")]
 
-                changed_rows = []
-                original_by_key = {r.get("dedup_key"): r for r in rows}
-                for edited in edited_rows:
-                    key = edited.get("dedup_key")
-                    original = original_by_key.get(key)
-                    if not original or not key:
-                        continue
-                    diffs = {f: edited.get(f, "") for f in editable_field_names
-                             if str(edited.get(f, "")) != str(original.get(f, ""))}
-                    if diffs:
-                        changed_rows.append((key, diffs))
+                    changed_rows = []
+                    original_by_key = {r.get("dedup_key"): r for r in rows}
+                    for edited in edited_rows:
+                        key = edited.get("dedup_key")
+                        original = original_by_key.get(key)
+                        if not original or not key:
+                            continue
+                        diffs = {f: edited.get(f, "") for f in editable_field_names
+                                 if str(edited.get(f, "")) != str(original.get(f, ""))}
+                        if diffs:
+                            changed_rows.append((key, diffs))
 
                 if changed_rows:
                     st.divider()
@@ -855,6 +864,31 @@ with tabs[2]:
                                                         key="workspace_add_channel")
                     new_content_angle = st.text_area("Notes (optional)", key="workspace_add_notes")
 
+                    # Custom fields — LIMITED to columns that already
+                    # exist on this campaign's Master rows, picked from a
+                    # live multiselect rather than typed freely, so there's
+                    # no way to introduce a typo'd or brand-new column
+                    # through this form. The built-in fields above are
+                    # excluded from the list since they're already covered.
+                    fixed_field_names = {"dedup_key", "platform", "username", "profile_link", "Campaign",
+                                          "contact_email", "content_angle", "review_status",
+                                          "outreach_channel", "data_source", "discovery_method", "date_added"}
+                    existing_custom_columns = sorted({
+                        k for row in campaign_rows for k in row.keys()
+                        if k not in fixed_field_names and k != "_row"
+                    })
+                    new_custom_values = {}
+                    if existing_custom_columns:
+                        selected_custom_fields = st.multiselect(
+                            "Custom fields (optional — only existing Master columns can be picked)",
+                            existing_custom_columns, key="workspace_add_custom_field_select")
+                        for field_name in selected_custom_fields:
+                            new_custom_values[field_name] = st.text_input(
+                                field_name, key=f"workspace_add_custom_value_{field_name}")
+                    else:
+                        st.caption("No custom columns exist on this campaign's Master yet — nothing to "
+                                   "pick from here.")
+
                     if st.button("Add Creator", type="primary", key="workspace_add_creator_button",
                                  disabled=not (new_platform and new_username)):
                         try:
@@ -868,6 +902,7 @@ with tabs[2]:
                                 "content_angle": new_content_angle,
                                 "review_status": new_review_status,
                                 "outreach_channel": new_add_channel,
+                                "custom_fields_json": json.dumps(new_custom_values) if new_custom_values else "",
                             })
                             st.success("Dispatched — check 'Add Manual Creator' in the Actions tab.")
                         except Exception as exc:  # noqa: BLE001
@@ -1244,97 +1279,6 @@ with tabs[3]:
                 else:
                     st.info(reason_s)
 
-            st.divider()
-            st.subheader("📇 Leads")
-            if leads_for_campaign:
-                lead_table = build_full_lead_table(leads_for_campaign)
-                st.dataframe(lead_table, use_container_width=True)
-            else:
-                st.caption("No leads in this campaign yet.")
-
-            with st.expander("📤 Import Leads (CSV)"):
-                st.caption(
-                    "Any CSV column that doesn't match FirstName/LastName/Email/Company defaults to a "
-                    "new custom field using its own column name — review and adjust below, or use "
-                    "'-- Skip --' for anything you don't want to bring in.")
-                uploaded_csv = st.file_uploader("CSV file", type=["csv"], key="ws_import_csv_uploader")
-                if uploaded_csv is not None:
-                    columns, rows = parse_csv_bytes(uploaded_csv.getvalue())
-                    duplicate_cols = find_duplicate_columns(columns)
-                    if duplicate_cols:
-                        st.warning(
-                            f"Duplicate column name(s) in this CSV: {', '.join(duplicate_cols)} — data "
-                            f"behind the EARLIER occurrence of each is already gone (Python's CSV reader "
-                            f"only keeps the last one per row). Rename one of them in the source file and "
-                            f"re-upload if that data matters.")
-
-                    custom_columns_known = sorted({k for lead in leads_for_campaign for k in lead.keys()
-                                                    if k not in KNOWN_FIELDS and k != "_row"})
-
-                    st.caption(f"{len(rows)} row(s) detected.")
-                    default_mapping = build_default_mapping(columns, custom_columns_known,
-                                                              reserved_names=outreach.MASTER_COLUMNS)
-                    mapping = {}
-                    new_field_names = {}
-                    for idx, col in enumerate(columns):
-                        default = default_mapping.get(col) or "-- Skip --"
-                        target_options = ["-- Skip --"] + KNOWN_FIELDS + custom_columns_known + \
-                            [NEW_CUSTOM_FIELD_OPTION]
-                        # If the zero-click default is a genuinely new
-                        # field (not in any existing option), show it as
-                        # the pre-filled "New custom field" choice rather
-                        # than silently falling back to index 0 (Skip).
-                        if default not in target_options:
-                            target_options = target_options[:-1] + [default, NEW_CUSTOM_FIELD_OPTION]
-                        default_idx = target_options.index(default) if default in target_options else 0
-                        # Keyed by POSITION and name together — a CSV with
-                        # a duplicate column name must never produce two
-                        # widgets sharing one key (Streamlit refuses that
-                        # outright); position alone guarantees uniqueness
-                        # regardless of what the duplicate-name warning
-                        # above already flagged.
-                        choice = st.selectbox(col, target_options, index=default_idx,
-                                               key=f"ws_import_map_{idx}_{col}")
-                        if choice == NEW_CUSTOM_FIELD_OPTION:
-                            new_name = st.text_input(f"New field name for '{col}'",
-                                                      key=f"ws_import_newfield_{idx}_{col}")
-                            new_field_names[col] = new_name
-                            mapping[col] = new_name
-                        else:
-                            mapping[col] = "" if choice == "-- Skip --" else choice
-
-                    mapping_error = validate_mapping(mapping)
-                    field_name_errors = [
-                        validate_custom_field_name(name, outreach.MASTER_COLUMNS)
-                        for col, name in new_field_names.items() if name is not None
-                    ]
-                    field_name_errors = [e for e in field_name_errors if e]
-
-                    if mapping_error:
-                        st.error(mapping_error)
-                    elif field_name_errors:
-                        for err in field_name_errors:
-                            st.error(err)
-                    else:
-                        mapped_rows = apply_mapping(rows, mapping)
-                        valid_count = count_valid_rows(mapped_rows)
-                        st.write(f"**{valid_count} of {len(mapped_rows)} row(s)** have an email and will "
-                                 f"be imported (duplicates against existing leads are checked server-side).")
-                        if st.button("Import", type="primary", key="ws_import_confirm_button",
-                                     disabled=valid_count == 0):
-                            try:
-                                client = _get_github_client()
-                                payload = build_import_payload(mapped_rows)
-                                path = import_payload_path(cname)
-                                client.create_file(path, payload_to_bytes(payload),
-                                                    message=f"Import {valid_count} lead(s) for {cname} "
-                                                            f"(via Workspace, by {current_user()})")
-                                time.sleep(1)
-                                client.dispatch_workflow(config.WORKFLOW_IMPORT_LEADS,
-                                                          {"campaign": cname, "payload_path": path})
-                                st.success("Dispatched — check 'Import Leads' in the Actions tab.")
-                            except Exception as exc:  # noqa: BLE001
-                                st.error(f"Couldn't import: {exc}")
 
 # =============================================================================
 # TAB 4 — Schedule
