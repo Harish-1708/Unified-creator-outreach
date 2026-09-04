@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from settings_logic import (
     load_raw_override, validate_settings, build_updated_override,
-    override_to_yaml_bytes, override_file_path,
+    override_to_yaml_bytes, override_file_path, build_asana_settings_override,
 )
 
 
@@ -140,3 +140,28 @@ def test_full_round_trip_load_edit_save_reload(tmp_path):
     assert reloaded["sending"]["daily_limit"] == 999
     assert reloaded["sending"]["per_account_daily_limit"] == 30
     assert reloaded["sending"]["rotation_accounts"] == ["sales1"]
+
+
+# ---------- build_asana_settings_override ----------
+
+def test_build_asana_settings_override_sets_enabled_and_project_name():
+    updated = build_asana_settings_override({}, enabled=True, project_name="Creator Outreach")
+    assert updated["asana"] == {"enabled": True, "project_name": "Creator Outreach"}
+
+
+def test_build_asana_settings_override_preserves_other_keys():
+    raw = {"sending": {"daily_limit": 100}, "status": "active"}
+    updated = build_asana_settings_override(raw, enabled=True, project_name="Creator Outreach")
+    assert updated["sending"] == {"daily_limit": 100}
+    assert updated["status"] == "active"
+
+
+def test_build_asana_settings_override_never_mutates_input():
+    raw = {"status": "active"}
+    build_asana_settings_override(raw, enabled=True, project_name="Creator Outreach")
+    assert raw == {"status": "active"}
+
+
+def test_build_asana_settings_override_disabled():
+    updated = build_asana_settings_override({}, enabled=False, project_name="")
+    assert updated["asana"]["enabled"] is False
