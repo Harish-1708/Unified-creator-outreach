@@ -16,8 +16,6 @@ from settings_logic import (  # noqa: E402
     load_raw_override, validate_settings, build_updated_override,
     override_to_yaml_bytes, override_file_path,
 )
-from sheets_readonly import ReadOnlySheetsConnector  # noqa: E402
-import creator_research_logic as crl  # noqa: E402
 
 # Page config is set once, centrally, in app.py via st.navigation/st.Page —
 # calling st.set_page_config here too would raise an error.
@@ -158,62 +156,6 @@ else:
             st.error(f"Couldn't dispatch Sync Shortlist: {exc}")
 
 st.divider()
-
-# =============================================================================
-# Campaign Settings (Asana sync) — moved here from the Creator Research
-# page, matching where this was actually asked to live. Keyed by discovery
-# Campaign (see campaign_settings.py's own docstring for why).
-# =============================================================================
-st.subheader("⚙️ Campaign Settings (Asana Sync)")
-
-if st.secrets.get("discovery_spreadsheet_id"):
-    @st.cache_resource(show_spinner=False)
-    def _get_discovery_connector() -> ReadOnlySheetsConnector:
-        sa_info = dict(st.secrets["google_sheets_readonly"]["service_account_json"])
-        sheet_id = st.secrets.get("discovery_spreadsheet_id", "")
-        return ReadOnlySheetsConnector(service_account_info=sa_info, sheet_id=sheet_id)
-
-    try:
-        discovery_connector = _get_discovery_connector()
-        run_log_records = discovery_connector.get_all_records_from_tab("Run Log")
-        discovery_campaigns = sorted({r["campaign"] for r in run_log_records if r.get("campaign")})
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Couldn't read the discovery sheet: {exc}")
-        discovery_campaigns = []
-
-    if not discovery_campaigns:
-        st.caption("No discovery campaigns found yet.")
-    else:
-        discovery_campaign = st.selectbox("Discovery campaign", discovery_campaigns,
-                                           key="settings_discovery_campaign")
-
-        all_settings = crl.load_current_settings()
-        current_status = crl.get_asana_sync_status(all_settings, discovery_campaign)
-
-        st.write(f"**Asana sync for '{discovery_campaign}'**: currently "
-                 + ("✅ ON" if current_status else "❌ OFF"))
-        st.caption(
-            "Controls BOTH Email and DM creators from this campaign — there's no separate "
-            "setting per channel. A campaign that's never been configured defaults to OFF."
-        )
-
-        new_status = st.toggle("Enable Asana sync for this campaign", value=current_status,
-                                key=f"settings_asana_toggle_{discovery_campaign}")
-
-        if new_status != current_status:
-            if st.button("Save Campaign Settings", type="primary", key="settings_save_asana"):
-                try:
-                    commit = crl.build_settings_commit(all_settings, discovery_campaign, new_status)
-                    client = _get_github_client()
-                    client.commit_campaign_files_directly(
-                        files=[{"path": commit["path"], "content": commit["content"]}],
-                        commit_message=commit["commit_message"],
-                    )
-                    st.success("Saved. Takes effect here once the app finishes redeploying.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't save settings: {exc}")
-else:
-    st.caption("Needs `discovery_spreadsheet_id` in Secrets — see above.")
 
 st.divider()
 st.caption(
