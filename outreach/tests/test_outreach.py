@@ -823,6 +823,99 @@ def test_import_leads_first_id_is_one_when_no_existing_leads():
     assert fake_sheets._leads[0]["LeadID"] == "1"
 
 
+def test_import_leads_widens_header_with_union_of_every_row_field_before_appending():
+    """The actual fix: different rows in one CSV can populate DIFFERENT
+    custom columns — the widen call must cover the union across the
+    whole batch, not just the first row's fields, and must happen before
+    any append (append_lead only fills in columns that already exist)."""
+    fake_sheets = FakeSheets([])
+    outreach.import_leads(fake_sheets, "TestCampaign", [
+        {"Email": "a@abc.com", "Client": "DudeRobe"},
+        {"Email": "b@abc.com", "Product": "Robe"},
+    ])
+    assert len(fake_sheets.header_widen_calls) == 1
+    widened_fields = set(fake_sheets.header_widen_calls[0])
+    assert "Client" in widened_fields
+    assert "Product" in widened_fields
+
+
+def test_import_leads_does_not_widen_header_when_batch_is_empty():
+    fake_sheets = FakeSheets([])
+    outreach.import_leads(fake_sheets, "TestCampaign", [])
+    assert fake_sheets.header_widen_calls == []
+
+
+# ---------- SheetsConnector.ensure_master_header_includes ----------
+
+class _FakeMasterWs:
+    def __init__(self, header, col_count):
+        self._header = header
+        self.col_count = col_count
+        self.resize_calls = []
+        self.batch_update_calls = []
+
+    def row_values(self, n):
+        return self._header if n == 1 else []
+
+    def resize(self, cols):
+        self.resize_calls.append(cols)
+        self.col_count = cols
+
+    def batch_update(self, updates):
+        self.batch_update_calls.append(updates)
+
+
+def _make_sheets_connector(master_ws):
+    sheets = outreach.SheetsConnector.__new__(outreach.SheetsConnector)
+    sheets.master_ws = master_ws
+    sheets._gspread = type("G", (), {"utils": type("U", (), {
+        "rowcol_to_a1": staticmethod(lambda r, c: f"R{r}C{c}")
+    })})()
+    return sheets
+
+
+def test_ensure_master_header_includes_adds_only_missing_columns():
+    ws = _FakeMasterWs(header=["LeadID", "Email"], col_count=38)
+    sheets = _make_sheets_connector(ws)
+    sheets.ensure_master_header_includes(["Email", "Client", "Product"])
+    written_values = [u["values"][0][0] for u in ws.batch_update_calls[0]]
+    assert set(written_values) == {"Client", "Product"}  # Email already existed, not rewritten
+
+
+def test_ensure_master_header_includes_does_nothing_when_all_columns_already_exist():
+    ws = _FakeMasterWs(header=["LeadID", "Email", "Client"], col_count=38)
+    sheets = _make_sheets_connector(ws)
+    sheets.ensure_master_header_includes(["Email", "Client"])
+    assert ws.batch_update_calls == []
+    assert ws.resize_calls == []
+
+
+def test_ensure_master_header_includes_resizes_grid_when_too_narrow():
+    """The exact real crash this guards against: writing beyond the
+    sheet's allocated grid width raises a hard API error — this must
+    grow the grid FIRST, before ever writing a header cell."""
+    ws = _FakeMasterWs(header=[f"col{i}" for i in range(38)], col_count=38)
+    sheets = _make_sheets_connector(ws)
+    sheets.ensure_master_header_includes(["NewField"])
+    assert ws.resize_calls == [49]  # 38 existing + 1 new + 10 headroom
+    assert ws.col_count == 49
+
+
+def test_ensure_master_header_includes_does_not_resize_when_grid_already_wide_enough():
+    ws = _FakeMasterWs(header=["LeadID", "Email"], col_count=100)
+    sheets = _make_sheets_connector(ws)
+    sheets.ensure_master_header_includes(["Client"])
+    assert ws.resize_calls == []
+
+
+def test_ensure_master_header_includes_new_columns_placed_after_existing_ones():
+    ws = _FakeMasterWs(header=["LeadID", "Email"], col_count=38)
+    sheets = _make_sheets_connector(ws)
+    sheets.ensure_master_header_includes(["Client"])
+    written_range = ws.batch_update_calls[0][0]["range"]
+    assert written_range == "R1C3"  # column 3 — right after the 2 existing columns
+
+
 def test_remove_leads_sets_status_removed_not_hard_delete():
     leads = [make_lead(_row=2, LeadID="5", Email="a@abc.com"), make_lead(_row=3, LeadID="8", Email="b@abc.com")]
     fake_sheets = FakeSheets(leads)
@@ -2246,9 +2339,13 @@ class FakeSheets:
         self.error_log = []
         self._logged_ids = set()
         self.marked_read_calls = []
+        self.header_widen_calls = []
 
     def get_all_leads(self):
         return [dict(lead) for lead in self._leads]
+
+    def ensure_master_header_includes(self, column_names):
+        self.header_widen_calls.append(list(column_names))
 
     def update_lead_fields(self, row_number, fields):
         for lead in self._leads:
