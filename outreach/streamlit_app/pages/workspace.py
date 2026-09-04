@@ -1007,17 +1007,19 @@ with tabs[3]:
                         source_filenames = client.list_directory_files(f"outreach/templates/{source_campaign}")
                         source_files = {}
                         for filename in source_filenames:
-                            content = client.get_file_content(
+                            source_files[filename] = client.get_file_content(
                                 f"outreach/templates/{source_campaign}/{filename}")
-                            if content is not None:
-                                source_files[filename] = content.encode("utf-8")
 
-                        override_content = client.get_file_content(
+                        # get_file_content_or_none, not get_file_content —
+                        # a source campaign with no override file at all is
+                        # a normal, expected state (running purely on
+                        # auto-discovered defaults), not an error.
+                        override_content = client.get_file_content_or_none(
                             f"outreach/config/campaigns/{source_campaign}.yaml")
-                        source_override = yaml.safe_load(override_content) if override_content else {}
+                        source_override = yaml.safe_load(override_content) if override_content else None
 
-                        files = build_campaign_duplication_files(source_files, source_override,
-                                                                  outreach_campaign)
+                        files = build_campaign_duplication_files(outreach_campaign, source_files,
+                                                                  source_override)
                         client.commit_campaign_files_directly(
                             files=files,
                             commit_message=f"Duplicate '{source_campaign}' as '{outreach_campaign}' "
@@ -1247,10 +1249,6 @@ with tabs[3]:
                             f"only keeps the last one per row). Rename one of them in the source file and "
                             f"re-upload if that data matters.")
 
-                    try:
-                        client_for_live_read.get_file_content(f"outreach/config/campaigns/{cname}.yaml")
-                    except Exception:  # noqa: BLE001
-                        pass
                     custom_columns_known = sorted({k for lead in leads_for_campaign for k in lead.keys()
                                                     if k not in KNOWN_FIELDS and k != "_row"})
 
