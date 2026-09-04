@@ -19,9 +19,14 @@ import shortlist
 
 
 class FakeWorksheet:
-    def __init__(self, headers, rows=None):
+    def __init__(self, headers, rows=None, col_count=None):
         self.headers = headers
         self._rows = rows or []
+        # Defaults to comfortably wide so existing tests (which don't care
+        # about grid limits at all) are unaffected — only tests that
+        # explicitly construct a narrow grid exercise the resize path.
+        self.col_count = col_count if col_count is not None else 1000
+        self.resize_calls = []
 
     def get_all_records(self):
         return [dict(r) for r in self._rows]
@@ -33,6 +38,10 @@ class FakeWorksheet:
         # deliberate no-op rather than something that would double as a
         # data record and pollute get_all_records().
         pass
+
+    def resize(self, cols):
+        self.resize_calls.append(cols)
+        self.col_count = cols
 
     def row_values(self, row_num):
         # Fake tabs in these tests are always constructed with the full,
@@ -186,6 +195,51 @@ def test_ensure_tab_headers_widens_a_stale_header_without_moving_data():
     # The row that existed before widening must still read correctly by
     # its original column names — nothing about the underlying data moved.
     assert ws.get_all_records()[0]["username"] == "dudedad"
+
+
+def test_ensure_tab_headers_grows_grid_before_writing_when_too_narrow():
+    """The exact live incident: 'APIError: [400]: Range (Shortlist!BM1)
+    exceeds grid limits. Max rows: 1000, max columns: 64' — a Shortlist
+    tab created long before SECTOR_HEADERS grew past 64 columns kept
+    crashing on EVERY sync attempt, no matter how many times with_backoff
+    retried, because the header CONTENT to write was correct but the
+    underlying grid had no room left — retrying the identical write can
+    never succeed on its own. The grid must be grown FIRST, before the
+    header cells are ever written."""
+    stale_header = [f"col{i}" for i in range(60)]  # already near the real 64-column limit
+    ws = FakeWorksheet(stale_header, col_count=64)
+
+    class WideningFakeWorksheet(FakeWorksheet):
+        def row_values(self, row_num):
+            return list(self.headers) if row_num == 1 else []
+
+        def update(self, range_str, values):
+            self.headers = self.headers + values[0]
+
+    ws.__class__ = WideningFakeWorksheet
+
+    full_headers = stale_header + ["Campaign", "review_status", "asana_task_id", "asana_synced_at", "dm_status"]
+    result = shortlist.ensure_tab_headers(ws, full_headers)
+
+    assert result == full_headers
+    assert ws.resize_calls, "Grid was never resized — this reproduces the exact live crash"
+    assert ws.col_count >= 65  # room for all 65 columns, not stuck at the original 64
+
+
+def test_ensure_tab_headers_does_not_resize_when_grid_already_wide_enough():
+    stale_header = ["dedup_key", "platform"]
+    ws = FakeWorksheet(stale_header, col_count=1000)
+
+    class WideningFakeWorksheet(FakeWorksheet):
+        def row_values(self, row_num):
+            return list(self.headers) if row_num == 1 else []
+
+        def update(self, range_str, values):
+            self.headers = self.headers + values[0]
+
+    ws.__class__ = WideningFakeWorksheet
+    shortlist.ensure_tab_headers(ws, stale_header + ["Campaign"])
+    assert ws.resize_calls == []
 
 
 def test_sync_shortlist_widens_an_already_existing_stale_shortlist_tab(monkeypatch):
