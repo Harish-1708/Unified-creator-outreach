@@ -50,14 +50,16 @@ from schedule_logic import (  # noqa: E402
     timezone_display_name, COMMON_TIMEZONES, DAY_OPTIONS,
 )
 from sequences_logic import (  # noqa: E402
-    get_existing_stages_and_variants, load_variant_content, next_available_variant_letter,
+    next_available_variant_letter,
+    fetch_live_stages_and_variants, fetch_live_template_content,
     build_variant_edit_file, build_new_variant_files_for_all_stages, validate_new_variant_contents,
     has_content_changed, can_delete_stage, build_stage_deletion_paths, can_delete_variant,
     build_variant_deletion_paths,
 )
 from campaign_builder import (  # noqa: E402
-    validate_variant_content, build_campaign_files, get_next_stage_for_campaign,
-    confirmation_matches_campaign_name, list_campaign_files_to_delete,
+    validate_variant_content, build_campaign_files,
+    fetch_live_next_stage_for_campaign, fetch_live_campaign_files_to_delete,
+    confirmation_matches_campaign_name,
 )
 from campaign_status_logic import (  # noqa: E402
     compute_campaign_readiness, compute_campaign_status, status_label,
@@ -973,7 +975,8 @@ with tabs[3]:
     else:
         cname = campaign_cfg["_campaign_name"]
         try:
-            stages, existing_variants = get_existing_stages_and_variants(cname, config.TEMPLATES_ROOT)
+            client_for_live_read = _get_github_client()
+            stages, existing_variants = fetch_live_stages_and_variants(client_for_live_read, cname)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Couldn't read templates for '{cname}': {exc}")
             stages, existing_variants = [], []
@@ -989,7 +992,7 @@ with tabs[3]:
                 st.markdown(f"**{stage['name']}**")
                 for variant in existing_variants:
                     try:
-                        original = load_variant_content(cname, prefix, variant, config.TEMPLATES_ROOT)
+                        original = fetch_live_template_content(client_for_live_read, cname, prefix, variant)
                     except Exception as exc:  # noqa: BLE001
                         st.warning(f"{prefix}_{variant}: {exc}")
                         continue
@@ -1056,7 +1059,7 @@ with tabs[3]:
                                 st.error(f"Failed: {exc}")
 
             try:
-                next_stage = get_next_stage_for_campaign(cname, config.TEMPLATES_ROOT)
+                next_stage = fetch_live_next_stage_for_campaign(client_for_live_read, cname)
             except Exception as exc:  # noqa: BLE001
                 next_stage = None
                 st.error(f"Couldn't determine next stage: {exc}")
@@ -1099,12 +1102,31 @@ with tabs[3]:
                     if st.button(f"Delete Variant {variant_to_delete}", disabled=not confirm,
                                  key="ws_delete_variant_btn"):
                         try:
-                            paths = build_variant_deletion_paths(cname, stages, variant_to_delete)
                             client = _get_github_client()
-                            for path in paths:
-                                client.delete_file(path, message=f"Delete variant {variant_to_delete} from "
-                                                                   f"{cname} (via Workspace, by {current_user()})")
-                            st.success(f"Variant {variant_to_delete} deleted from {len(paths)} stage(s).")
+                            # Re-verify live, immediately before executing —
+                            # protects against a change landing in the
+                            # narrow window between this page loading and
+                            # this button actually being clicked. This is
+                            # the exact safety layer that was missing when
+                            # a stale read let a Delete Stage action once
+                            # commit based on an inconsistent view of which
+                            # variants existed, corrupting a real campaign.
+                            live_stages, live_variants = fetch_live_stages_and_variants(client, cname)
+                            if live_variants != existing_variants:
+                                st.error(
+                                    f"The campaign's variants changed since this page loaded (now: "
+                                    f"{live_variants}, expected: {existing_variants}) — refusing to delete "
+                                    f"based on a stale view. Refresh the page and try again.")
+                            elif variant_to_delete not in live_variants:
+                                st.error(f"Variant {variant_to_delete} no longer exists live — someone "
+                                         f"else may have already deleted it. Refresh the page.")
+                            else:
+                                paths = build_variant_deletion_paths(cname, live_stages, variant_to_delete)
+                                for path in paths:
+                                    client.delete_file(path, message=f"Delete variant {variant_to_delete} "
+                                                                      f"from {cname} (via Workspace, by "
+                                                                      f"{current_user()})")
+                                st.success(f"Variant {variant_to_delete} deleted from {len(paths)} stage(s).")
                         except GitHubActionsError as exc:
                             st.error(f"Failed: {exc}")
                 else:
@@ -1120,13 +1142,25 @@ with tabs[3]:
                     if st.button(f"Delete {last_stage['name']}", disabled=not confirm_s,
                                  key="ws_delete_stage_btn"):
                         try:
-                            paths = build_stage_deletion_paths(cname, last_stage["template_prefix"],
-                                                                existing_variants)
                             client = _get_github_client()
-                            for path in paths:
-                                client.delete_file(path, message=f"Delete stage {last_stage['name']} from "
-                                                                   f"{cname} (via Workspace, by {current_user()})")
-                            st.success(f"'{last_stage['name']}' deleted.")
+                            # Same live re-verification as Delete Variant
+                            # above — see its comment for why this matters.
+                            live_stages, live_variants = fetch_live_stages_and_variants(client, cname)
+                            live_last_prefix = live_stages[-1]["template_prefix"] if live_stages else None
+                            if live_last_prefix != last_stage["template_prefix"]:
+                                st.error(
+                                    f"The campaign's stages changed since this page loaded (the last "
+                                    f"stage is now '{live_last_prefix}', expected "
+                                    f"'{last_stage['template_prefix']}') — refusing to delete based on a "
+                                    f"stale view. Refresh the page and try again.")
+                            else:
+                                paths = build_stage_deletion_paths(cname, last_stage["template_prefix"],
+                                                                    live_variants)
+                                for path in paths:
+                                    client.delete_file(path, message=f"Delete stage {last_stage['name']} "
+                                                                      f"from {cname} (via Workspace, by "
+                                                                      f"{current_user()})")
+                                st.success(f"'{last_stage['name']}' deleted.")
                         except GitHubActionsError as exc:
                             st.error(f"Failed: {exc}")
                 else:
@@ -1403,8 +1437,8 @@ with tabs[5]:
             if st.button("Permanently Delete Campaign", type="primary", disabled=not confirmed,
                          key="ws_delete_campaign_btn"):
                 try:
-                    paths = list_campaign_files_to_delete(cname, config.TEMPLATES_ROOT, config.CAMPAIGNS_DIR)
                     client = _get_github_client()
+                    paths = fetch_live_campaign_files_to_delete(client, cname)
                     for path in paths:
                         client.delete_file(path, message=f"Delete campaign {cname} "
                                                           f"(via Workspace, by {current_user()})")
