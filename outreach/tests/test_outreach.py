@@ -4412,3 +4412,92 @@ def test_discover_nonexistent_directory_raises(tmp_path):
         assert False, "should have raised ConfigError"
     except outreach.ConfigError:
         pass
+
+
+# =============================================================================
+# parse_stages_and_variants_from_filenames / parse_template_content —
+# pure, filesystem-free versions used for LIVE (GitHub API) reads, so a
+# stale local checkout is never the only thing standing between a
+# destructive action and a corrupted repo state.
+# =============================================================================
+
+def test_parse_stages_from_filenames_basic_single_stage():
+    stages, variants = outreach.parse_stages_and_variants_from_filenames(
+        ["intro_A.txt"], {})
+    assert len(stages) == 1
+    assert stages[0]["template_prefix"] == "intro"
+    assert variants == ["A"]
+
+
+def test_parse_stages_from_filenames_multi_stage_multi_variant():
+    files = ["intro_A.txt", "intro_B.txt", "followup1_A.txt", "followup1_B.txt"]
+    stages, variants = outreach.parse_stages_and_variants_from_filenames(files, {})
+    assert [s["template_prefix"] for s in stages] == ["intro", "followup1"]
+    assert variants == ["A", "B"]
+
+
+def test_parse_stages_from_filenames_stops_at_first_gap():
+    """The exact contiguity check that caught the real corruption case:
+    followup1 missing but followup2 present must never be silently
+    treated as 'skip a stage'."""
+    files = ["intro_A.txt", "followup2_A.txt"]
+    stages, variants = outreach.parse_stages_and_variants_from_filenames(files, {})
+    assert [s["template_prefix"] for s in stages] == ["intro"]
+
+
+def test_parse_stages_from_filenames_rejects_inconsistent_variants():
+    """The exact scenario that caused real, permanent corruption: a stage
+    missing some of the variants an earlier stage has must raise, not
+    silently shrink that stage's variant set."""
+    files = ["intro_A.txt", "intro_B.txt",
+             "followup1_A.txt", "followup1_B.txt",
+             "followup2_A.txt", "followup2_B.txt",
+             "followup3_A.txt"]  # missing B — inconsistent with every earlier stage
+    with pytest.raises(outreach.ConfigError, match="missing variant"):
+        outreach.parse_stages_and_variants_from_filenames(files, {})
+
+
+def test_parse_stages_from_filenames_raises_when_empty():
+    with pytest.raises(outreach.ConfigError, match="No template files found"):
+        outreach.parse_stages_and_variants_from_filenames([], {})
+
+
+def test_parse_stages_from_filenames_applies_wait_days():
+    stages, _ = outreach.parse_stages_and_variants_from_filenames(
+        ["intro_A.txt", "followup1_A.txt"], {"followup1": 3})
+    by_prefix = {s["template_prefix"]: s for s in stages}
+    assert by_prefix["intro"]["wait_days_after_previous"] == 0
+    assert by_prefix["followup1"]["wait_days_after_previous"] == 3
+
+
+def test_discover_stages_and_variants_still_works_against_a_real_directory(tmp_path):
+    """The filesystem wrapper must still behave identically to before —
+    this refactor must be purely additive, not a behavior change for
+    existing callers (GitHub Actions workflows that only ever run
+    against a definitely-current checkout)."""
+    campaign_dir = tmp_path / "TestCampaign"
+    campaign_dir.mkdir()
+    (campaign_dir / "intro_A.txt").write_text("Subject: Hi\n\nBody")
+    stages, variants = outreach.discover_stages_and_variants(str(campaign_dir), {})
+    assert len(stages) == 1
+    assert variants == ["A"]
+
+
+def test_parse_template_content_basic():
+    result = outreach.parse_template_content("Subject: Hello there\n\nBody line 1\nBody line 2")
+    assert result == {"subject": "Hello there", "body": "Body line 1\nBody line 2"}
+
+
+def test_parse_template_content_rejects_missing_subject_line():
+    with pytest.raises(outreach.TemplateError, match="must start with"):
+        outreach.parse_template_content("No subject line here\n\nBody")
+
+
+def test_load_template_still_works_against_a_real_file(tmp_path):
+    """Same behavior-preservation guarantee as the stages/variants
+    wrapper above."""
+    campaign_dir = tmp_path / "TestCampaign"
+    campaign_dir.mkdir()
+    (campaign_dir / "intro_A.txt").write_text("Subject: Hi there\n\nBody text")
+    result = outreach.load_template(str(campaign_dir), "intro", "A")
+    assert result == {"subject": "Hi there", "body": "Body text"}
