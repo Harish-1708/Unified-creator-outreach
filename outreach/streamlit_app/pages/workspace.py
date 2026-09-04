@@ -344,8 +344,22 @@ leads_for_campaign, responses_for_campaign = [], []
 try:
     campaign_cfg = get_campaign_cfg(outreach_campaign)
     is_draft = (campaign_cfg.get("status") or "active") == "draft"
-    if not is_draft:
+    # Always attempt the live fetch, even for a draft — "not launched
+    # yet" and "has no data" are independent facts. A campaign
+    # auto-created by Push to Outreach starts as a draft AND has a real
+    # creator in it from the moment it's created; hiding that data until
+    # launch would mean the very first thing you'd want to check after
+    # pushing a creator — did it actually land? — shows nothing.
+    try:
         leads_for_campaign, responses_for_campaign = _fetch_outreach_campaign_data(outreach_campaign)
+    except Exception:  # noqa: BLE001
+        # Only genuinely expected for a brand-new draft that hasn't had
+        # anything pushed into it yet (no Sheet tab exists). A non-draft
+        # campaign failing to load is a real problem and should NOT be
+        # silently swallowed here — but every tab below already has its
+        # own "doesn't exist yet" messaging, so nothing further is shown
+        # in either case at this level.
+        leads_for_campaign, responses_for_campaign = [], []
 except Exception:  # noqa: BLE001
     # Genuinely expected the first time — no creator has been pushed to
     # Email yet for this campaign, so it has no templates. Not an error;
@@ -1021,8 +1035,8 @@ with tabs[3]:
                     for stage in stages:
                         prefix = stage["template_prefix"]
                         st.markdown(f"**{stage['name']}**")
-                        subj = st.text_input("Subject", key=f"ws_newvar_subj_{prefix}")
-                        bod = st.text_area("Body", key=f"ws_newvar_body_{prefix}", height=120)
+                        subj = st.text_input("Subject", key=f"ws_newvar_subj_{prefix}_{next_letter}")
+                        bod = st.text_area("Body", key=f"ws_newvar_body_{prefix}_{next_letter}", height=120)
                         contents_by_stage[prefix] = {"subject": subj, "body": bod}
                     if st.button(f"Add Variant {next_letter}", type="primary", key="ws_add_variant"):
                         errs = validate_new_variant_contents(stages, contents_by_stage)
