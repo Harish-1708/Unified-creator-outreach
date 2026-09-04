@@ -1,21 +1,42 @@
 name: Sync Asana
 
+# Two ways to trigger, matching the two things this needs to do:
+#  - workflow_dispatch with a campaign input: the Settings tab's "sync to
+#    asana now" button, for one specific campaign, on demand.
+#  - schedule: loops over EVERY campaign that has asana.enabled set to
+#    true (see outreach.py's cmd_sync_asana_all) — not a single
+#    hardcoded default campaign, since more than one campaign will have
+#    this turned on over time.
 on:
   workflow_dispatch:
     inputs:
       campaign:
-        description: "Campaign name — syncs only this one. Leave blank to sync every campaign with asana.enabled: true instead."
+        description: "Campaign name — leave blank to sync every enabled campaign instead"
         required: false
   schedule:
-    # Daily at 13:00 UTC — loops every campaign with asana.enabled: true.
-    # A manual dispatch with a specific campaign name only ever syncs
-    # that one; this scheduled trigger always runs the "sync everything
-    # enabled" path, never a single campaign.
+    # Once a day. Asana sync isn't as time-sensitive as checking for
+    # replies — adjust the interval here if that stops being true.
     - cron: "0 13 * * *"
 
+# Two overlapping syncs (a scheduled run and a manual click close
+# together) could both decide the same lead needs a NEW task at the same
+# time, before either has written the resulting AsanaTaskGID back —
+# that's exactly the duplicate-creation race this queues away instead of
+# risking.
+concurrency:
+  group: sync-asana
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
 jobs:
-  sync:
+  sync-asana:
     runs-on: ubuntu-latest
+    # Every `run:` step below executes with this as the working
+    # directory — outreach.py lives at outreach/outreach.py in the
+    # unified repo, not at repo root, so pip install and `python
+    # outreach.py` both need to resolve relative to here.
     defaults:
       run:
         working-directory: outreach
@@ -25,15 +46,20 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - name: Sync one campaign
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.campaign != ''
+      - name: Sync Asana
         env:
-          ASANA_API_KEY: ${{ secrets.ASANA_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: python outreach.py sync-asana --campaign "${{ github.event.inputs.campaign }}"
-      - name: Sync every enabled campaign
-        if: github.event_name == 'schedule' || github.event.inputs.campaign == ''
-        env:
-          ASANA_API_KEY: ${{ secrets.ASANA_API_KEY }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: python outreach.py sync-asana-all
+          ASANA_ACCESS_TOKEN: ${{ secrets.ASANA_ACCESS_TOKEN }}
+        run: |
+          set -o pipefail
+          if [ -n "${{ github.event.inputs.campaign }}" ]; then
+            python outreach.py sync-asana --campaign "${{ github.event.inputs.campaign }}" | tee sync_asana_output.txt
+          else
+            python outreach.py sync-asana-all | tee sync_asana_output.txt
+          fi
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat sync_asana_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
