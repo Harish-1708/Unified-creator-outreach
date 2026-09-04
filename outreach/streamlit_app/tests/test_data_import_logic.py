@@ -275,3 +275,18 @@ def test_search_empty_query_returns_all():
 def test_search_no_match_returns_empty():
     leads = [_lead()]
     assert search_leads(leads, "nomatch") == []
+
+
+def test_find_duplicate_columns_three_or_more_occurrences_still_reported_once():
+    columns = ["Email", "Client", "Client", "Client"]
+    assert find_duplicate_columns(columns) == ["Client"]
+
+
+def test_parse_csv_bytes_confirms_duplicate_header_data_loss():
+    """Documents the actual behavior driving why find_duplicate_columns
+    matters — Python's own csv.DictReader silently keeps only the LAST
+    duplicate-named column's value, before this module ever sees it."""
+    raw = b"Email,Last Contact Date,Last Contact Date\nsam@abc.com,2026-08-01,2026-08-02\n"
+    columns, rows = parse_csv_bytes(raw)
+    assert columns.count("Last Contact Date") == 2  # the header itself still shows both
+    assert rows[0]["Last Contact Date"] == "2026-08-02"  # but only the LAST value survives per row
