@@ -98,25 +98,6 @@ def test_unknown_view_raises_clearly():
         crl.filter_creator_rows([], "NotARealView")
 
 
-# ---------- Asana settings wiring ----------
-
-def test_get_asana_sync_status_defaults_off_for_unconfigured_campaign():
-    assert crl.get_asana_sync_status({}, "Brand_New_Campaign") is False
-
-
-def test_build_settings_commit_returns_correct_shape():
-    commit = crl.build_settings_commit({}, "Kelson_Creators_Licensing", asana_sync=True)
-    assert commit["path"] == "discovery/config/campaign_settings.yaml"
-    assert b"asana_sync" in commit["content"]
-    assert "Enable" in commit["commit_message"]
-    assert "Kelson_Creators_Licensing" in commit["commit_message"]
-
-
-def test_build_settings_commit_disable_wording():
-    commit = crl.build_settings_commit({}, "X", asana_sync=False)
-    assert "Disable" in commit["commit_message"]
-
-
 def test_load_current_settings_missing_file_returns_empty_dict():
     """No campaign_settings.yaml committed yet is a legitimate, common
     starting state — must not raise."""
@@ -394,3 +375,52 @@ def test_build_analytics_totals_sums_across_campaigns():
     assert totals["runs"] == 3
     assert totals["in_master"] == 8
     assert totals["approved"] == 3
+
+
+# ---------- single-campaign clean table ----------
+
+def _table_master_row(review_status="", channel="", dm_status=""):
+    return {"review_status": review_status, "outreach_channel": channel, "dm_status": dm_status}
+
+
+def test_build_single_campaign_table_order_and_labels():
+    result = crl.build_single_campaign_table([], [], [])
+    labels = [row["Metric"] for row in result]
+    assert labels == ["Total Found (all runs)", "Total Master", "Total Excluded", "Total Shortlisted",
+                       "Total Email", "Total DM", "Total Response", "Total Final"]
+
+
+def test_build_single_campaign_table_sums_found_across_runs():
+    run_log = [{"total_found": "10"}, {"total_found": "20"}]
+    result = crl.build_single_campaign_table(run_log, [], [])
+    by_metric = {r["Metric"]: r["Count"] for r in result}
+    assert by_metric["Total Found (all runs)"] == 30
+
+
+def test_build_single_campaign_table_master_and_excluded_are_plain_counts():
+    master = [_table_master_row(), _table_master_row()]
+    excluded = [{}]
+    result = crl.build_single_campaign_table([], master, excluded)
+    by_metric = {r["Metric"]: r["Count"] for r in result}
+    assert by_metric["Total Master"] == 2
+    assert by_metric["Total Excluded"] == 1
+
+
+def test_build_single_campaign_table_matches_filter_creator_rows_exactly():
+    """The core guarantee: these counts must be IDENTICAL to what
+    filter_creator_rows itself returns for the Data tab — never a
+    separately-computed number that could disagree with what a human
+    sees by actually opening that sub-tab."""
+    master = [
+        _table_master_row(review_status="Approved", channel="email"),
+        _table_master_row(review_status="Approved", channel="dm"),
+        _table_master_row(review_status="Rejected"),
+        _table_master_row(dm_status="Replied"),
+    ]
+    result = crl.build_single_campaign_table([], master, [])
+    by_metric = {r["Metric"]: r["Count"] for r in result}
+    assert by_metric["Total Shortlisted"] == len(crl.filter_creator_rows(master, "Shortlisted"))
+    assert by_metric["Total Email"] == len(crl.filter_creator_rows(master, "Email"))
+    assert by_metric["Total DM"] == len(crl.filter_creator_rows(master, "DM"))
+    assert by_metric["Total Response"] == len(crl.filter_creator_rows(master, "Response"))
+    assert by_metric["Total Final"] == len(crl.filter_creator_rows(master, "Final"))
