@@ -57,12 +57,9 @@ def compute_campaign_readiness(campaign_cfg: Dict, leads: List[Dict]) -> Tuple[b
     if not campaign_cfg.get("stages"):
         problems.append("No template stages found")
 
-    has_approved_lead = any(
-        (l.get("Approval") == "Yes") and (l.get("Email") or "").strip()
-        for l in leads
-    )
-    if not has_approved_lead:
-        problems.append("No approved leads with an email address")
+    has_lead_with_email = any((l.get("Email") or "").strip() for l in leads)
+    if not has_lead_with_email:
+        problems.append("No leads with an email address")
 
     return (len(problems) == 0, problems)
 
@@ -80,14 +77,14 @@ def is_lead_finished(lead: Dict, stages: List[Dict]) -> bool:
 
 
 def compute_campaign_is_complete(campaign_cfg: Dict, leads: List[Dict]) -> bool:
-    """True only if there's at least one approved lead AND every one of
+    """True only if there's at least one sendable lead AND every one of
     them is finished — an empty/not-yet-populated campaign is NOT
     "completed", it just hasn't started."""
     stages = campaign_cfg.get("stages", [])
-    approved = [l for l in leads if l.get("Approval") == "Yes" and (l.get("Email") or "").strip()]
-    if not approved:
+    sendable = [l for l in leads if (l.get("Email") or "").strip()]
+    if not sendable:
         return False
-    return all(is_lead_finished(l, stages) for l in approved)
+    return all(is_lead_finished(l, stages) for l in sendable)
 
 
 def compute_campaign_status(campaign_cfg: Dict, leads: List[Dict]) -> Tuple[str, List[str]]:
