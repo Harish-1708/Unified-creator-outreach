@@ -96,9 +96,18 @@ def _get_github_client() -> GitHubClient:
 
 
 def _wait_for_run_completion(client, run_details, workflow_file: str,
-                              timeout_seconds: int = 90, poll_interval: int = 4):
+                              timeout_seconds: int = 150, poll_interval: int = 5):
     """Polls a dispatched run until it reports 'completed', or gives up
     after timeout_seconds. Returns (completed: bool, conclusion: str|None).
+
+    150 seconds, not a shorter number — a run that actually FAILS can
+    take longer to report that than one that succeeds: GitHub Actions
+    queue/startup time, then (for a Sheets-writing script specifically)
+    up to 5 retries at exponential backoff before finally giving up and
+    reporting failure — 1+2+4+8+16 seconds just in retry waits, on top
+    of everything else. A timeout shorter than that risks reporting
+    "didn't confirm completion" for a run that would have told you
+    definitively it failed, just a few seconds later.
 
     Dispatching a workflow only QUEUES it — GitHub Actions runs
     asynchronously, so a fixed sleep before the next dependent step is
@@ -765,8 +774,12 @@ with tabs[2]:
                                                "completion within the wait — run it manually from here "
                                                "once it finishes, or push manually afterward.")
                                 elif sync_conclusion != "success":
-                                    st.error(f"Sync Shortlist finished with conclusion "
-                                             f"'{sync_conclusion}' — check the Actions tab.")
+                                    st.error(f"Review decision was saved to Master successfully — that "
+                                             f"part worked. But Sync Shortlist failed (conclusion: "
+                                             f"'{sync_conclusion}'), so this won't show up in Shortlist/"
+                                             f"Email/DM views yet, and Push was NOT attempted. Check the "
+                                             f"Actions tab for the actual error, then run 'Sync Shortlist' "
+                                             f"manually from Settings once it's fixed.")
                                 elif new_channel == "email":
                                     with st.spinner("Pushing to outreach..."):
                                         if not campaign_exists_already:
