@@ -95,6 +95,32 @@ def curate_row(row: Dict) -> Dict:
     return {col: row[col] for col in CURATED_LEAD_COLUMNS if col in row}
 
 
+def search_creator_rows(rows: List[Dict], query: str) -> List[Dict]:
+    """Pure — case-insensitive substring match against EVERY field's
+    value on each row, not a fixed subset — a search for a partial
+    email, a partial username, or a note fragment in content_angle
+    should all work the same way, without needing to know in advance
+    which column the match will be in. A blank query returns every row
+    unchanged, not an empty result."""
+    query_clean = (query or "").strip().lower()
+    if not query_clean:
+        return rows
+    return [row for row in rows if any(query_clean in str(v).lower() for v in row.values())]
+
+
+def filter_creator_rows_by_review_status(rows: List[Dict], status_filter: str) -> List[Dict]:
+    """Pure — status_filter of "All" (or blank) returns every row
+    unchanged. Matches review_status case-insensitively, and a row with
+    a blank review_status is treated as "Pending" for filtering
+    purposes, matching how the rest of this app already treats an
+    unset review_status."""
+    if not status_filter or status_filter == "All":
+        return rows
+    target = status_filter.strip().lower()
+    return [row for row in rows
+            if (row.get("review_status", "").strip().lower() or "pending") == target]
+
+
 def filter_creator_rows(master_records: List[Dict], view: str) -> List[Dict]:
     """One function for every 'Lead Data' tab — same underlying MASTER
     rows, sliced differently. Deliberately reads MASTER, not Shortlist:
