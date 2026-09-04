@@ -49,7 +49,7 @@ from email_account_slots_logic import read_local_slot_mapping  # noqa: E402
 from accounts_logic import merge_account_directories  # noqa: E402
 from settings_logic import (  # noqa: E402
     load_raw_override, validate_settings, build_updated_override,
-    override_to_yaml_bytes, override_file_path,
+    override_to_yaml_bytes, override_file_path, build_asana_settings_override,
 )
 from schedule_logic import (  # noqa: E402
     validate_schedule, build_updated_schedule_override, get_current_schedule,
@@ -1546,13 +1546,12 @@ with tabs[5]:
                         st.error(f"Failed to trigger Send: {exc}")
 
         st.divider()
-        with st.expander("🔗 Asana Sync"):
-            try:
-                raw_for_asana = load_raw_override(cname, config.CAMPAIGNS_DIR)
-            except Exception:  # noqa: BLE001
-                raw_for_asana = {}
-            asana_cfg_current = raw_for_asana.get("asana", {})
-            asana_enabled_now = bool(asana_cfg_current.get("enabled"))
+        try:
+            raw_for_asana = load_raw_override(cname, config.CAMPAIGNS_DIR)
+        except Exception:  # noqa: BLE001
+            raw_for_asana = {}
+        asana_settings = raw_for_asana.get("asana") or {}
+        with st.expander("🔗 Asana Sync", expanded=bool(asana_settings.get("enabled"))):
             st.caption(
                 "Creates or updates one Asana task per lead — never a duplicate, since each lead's "
                 "task is tracked once it's first created. A lead's stage (Sourced / Outreach Sent / "
@@ -1560,36 +1559,38 @@ with tabs[5]:
                 "Secured and Declined / Dead are only ever set by hand in Asana and are never "
                 "overwritten by a sync."
             )
-            st.write(f"Asana sync for **{cname}**: currently " + ("✅ ON" if asana_enabled_now else "❌ OFF"))
+            enabled = st.checkbox("Enable Asana sync for this campaign", value=bool(asana_settings.get("enabled")),
+                                   key="ws_asana_sync_enabled")
+            project_name = st.text_input("Asana project name (exact match)",
+                                          value=asana_settings.get("project_name", ""),
+                                          key="ws_asana_sync_project_name")
 
-            new_asana_enabled = st.toggle("Enable Asana sync for this campaign", value=asana_enabled_now,
-                                           key="ws_asana_enabled_toggle")
-            asana_project_name = st.text_input("Asana project name (exact match)", value=asana_cfg_current.get(
-                "project_name", cname), key="ws_asana_project_name")
-
-            if st.button("Save asana sync settings", key="ws_save_asana_settings"):
-                try:
-                    updated_override = dict(raw_for_asana)
-                    updated_override["asana"] = {"enabled": new_asana_enabled,
-                                                  "project_name": asana_project_name}
-                    client = _get_github_client()
-                    client.create_file(
-                        override_file_path(cname), override_to_yaml_bytes(updated_override),
-                        message=f"Update Asana settings for {cname} (via Workspace, by {current_user()})")
-                    st.success("Saved. May take a minute to reflect here while the app redeploys.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't save: {exc}")
-
-            if asana_enabled_now:
-                if st.button("sync to asana now", type="primary", key="ws_asana_sync_now"):
+            if st.button("💾 Save Asana Settings", key="ws_asana_sync_save"):
+                if enabled and not project_name.strip():
+                    st.error("Enter the Asana project name, or uncheck Enable.")
+                else:
                     try:
-                        _get_github_client().dispatch_workflow(config.WORKFLOW_SYNC_ASANA,
-                                                                {"campaign": cname})
-                        st.success("Dispatched — check 'Sync Asana' in the Actions tab.")
+                        updated = build_asana_settings_override(raw_for_asana, enabled, project_name.strip())
+                        client = _get_github_client()
+                        client.create_file(
+                            override_file_path(cname), override_to_yaml_bytes(updated),
+                            message=f"Update Asana sync settings for {cname} (via Workspace, "
+                                    f"by {current_user()})")
+                        st.success("Asana settings saved. May take a minute to reflect here while the "
+                                   "app redeploys.")
                     except Exception as exc:  # noqa: BLE001
-                        st.error(f"Couldn't dispatch: {exc}")
+                        st.error(f"Failed to save: {exc}")
+
+            if asana_settings.get("enabled"):
+                if st.button("🔄 Sync to Asana Now", key="ws_asana_sync_now"):
+                    try:
+                        client = _get_github_client()
+                        client.dispatch_workflow(config.WORKFLOW_SYNC_ASANA, {"campaign": cname})
+                        st.success(f"Asana sync triggered for '{cname}'. Check the Actions tab for progress.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Failed to trigger sync: {exc}")
             else:
-                st.caption("Enable and save above to unlock manual sync.")
+                st.caption("Enable and save first to sync.")
 
         st.divider()
         with st.expander("🗑️ Danger Zone"):
