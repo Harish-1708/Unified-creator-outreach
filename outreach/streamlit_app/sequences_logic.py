@@ -32,9 +32,38 @@ def get_existing_stages_and_variants(campaign_name: str, templates_root: str) ->
     return outreach.discover_stages_and_variants(campaign_dir, stage_wait_days={})
 
 
+def fetch_live_stages_and_variants(client, campaign_name: str) -> Tuple[List[Dict], List[str]]:
+    """LIVE equivalent of get_existing_stages_and_variants — fetches the
+    directory listing straight from GitHub's API instead of the local
+    checkout, then runs it through the exact same validation
+    (outreach.parse_stages_and_variants_from_filenames).
+
+    This is the actual fix for the class of bug that corrupted a real
+    campaign in production: a local checkout can lag behind a very
+    recent commit during a redeploy, so a display or a delete action
+    that only ever reads locally can act on a view of the repo that's
+    already stale by the time the action runs. Every caller that
+    displays structure OR offers a delete/rename button for that
+    structure should use this, not the local-disk version — see
+    get_existing_stages_and_variants's own docstring reasoning."""
+    filenames = client.list_directory_files(f"outreach/templates/{campaign_name}")
+    return outreach.parse_stages_and_variants_from_filenames(
+        filenames, stage_wait_days={}, source_description=f"campaign '{campaign_name}' (live from GitHub)")
+
+
 def load_variant_content(campaign_name: str, stage_prefix: str, variant: str, templates_root: str) -> Dict[str, str]:
     campaign_dir = os.path.join(templates_root, campaign_name)
     return outreach.load_template(campaign_dir, stage_prefix, variant)
+
+
+def fetch_live_template_content(client, campaign_name: str, stage_prefix: str, variant: str) -> Dict[str, str]:
+    """LIVE equivalent of load_variant_content — same reasoning as
+    fetch_live_stages_and_variants above."""
+    path = f"outreach/templates/{campaign_name}/{stage_prefix}_{variant}.txt"
+    content = client.get_file_content(path)
+    if content is None:
+        raise outreach.TemplateError(f"Template file not found on GitHub: {path}")
+    return outreach.parse_template_content(content, source_description=f"Template {path}")
 
 
 def next_available_variant_letter(existing_variants: List[str]) -> Optional[str]:
