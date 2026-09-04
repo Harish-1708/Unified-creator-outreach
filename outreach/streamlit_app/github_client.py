@@ -127,9 +127,29 @@ class GitHubClient:
             raise GitHubActionsError(f"'{path}' is a file, not a directory.")
         return [entry["name"] for entry in entries if entry.get("type") == "file"]
 
-    def get_file_content(self, path: str, ref: str = "main") -> Optional[str]:
+    def get_file_content(self, path: str, ref: str = "main") -> bytes:
+        """Raw bytes of one file's current content, read fresh from
+        GitHub — same "authoritative, never the local checkout" reason
+        as list_directory_files. Raises if the file doesn't exist.
+        Matches the real, authoritative Email Outreach Automation
+        codebase's own contract exactly — callers that need "may not
+        exist yet, tolerate that" behavior should use
+        get_file_content_or_none instead, not re-wrap this in a
+        try/except that swallows a GENUINE failure the same way."""
+        url = f"{GITHUB_API}/repos/{self.owner}/{self.repo}/contents/{path}"
+        resp = requests.get(url, headers=self._headers, params={"ref": ref}, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise GitHubActionsError(f"Failed to read '{path}': {resp.status_code} {resp.text[:300]}")
+        return base64.b64decode(resp.json()["content"])
+
+    def get_file_content_or_none(self, path: str, ref: str = "main") -> Optional[str]:
         """Current LIVE content of the file at `path` on `ref` — decoded
-        text, or None if it doesn't exist yet.
+        text, or None if it doesn't exist yet. For callers where "doesn't
+        exist" is a normal, expected state (a mapping file that hasn't
+        been created yet, a campaign override that was never written) —
+        NOT for reading something that's supposed to definitely exist
+        (a template file), where get_file_content's raise-on-missing is
+        the correct behavior instead.
 
         This is the fix for a real read-modify-write race: any caller
         that reads a file from a slow-to-update local disk copy (e.g. a
