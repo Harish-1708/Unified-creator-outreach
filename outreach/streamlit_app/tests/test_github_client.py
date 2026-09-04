@@ -465,9 +465,41 @@ def test_set_variable_raises_on_failure(monkeypatch):
         _client().set_variable("BAD_NAME", "value")
 
 
-# ---------- get_file_content ----------
+# ---------- get_file_content (real contract: bytes, raises on any failure) ----------
 
-def test_get_file_content_decodes_base64_correctly(monkeypatch):
+def test_get_file_content_returns_raw_bytes(monkeypatch):
+    import base64
+    real_content = b"Subject: Hi\n\nBody text"
+    encoded = base64.b64encode(real_content).decode("ascii")
+
+    def _fake_get(url, headers=None, params=None, timeout=None):
+        return _fake_response(200, {"content": encoded, "sha": "abc123"})
+
+    monkeypatch.setattr(github_client.requests, "get", _fake_get)
+    result = _client().get_file_content("outreach/templates/X/intro_A.txt")
+    assert result == real_content
+    assert isinstance(result, bytes)
+
+
+def test_get_file_content_raises_on_404_not_returns_none(monkeypatch):
+    """Matches the real, authoritative contract exactly — a missing file
+    is a genuine error here (a template that's supposed to exist),
+    unlike get_file_content_or_none where missing is a normal state."""
+    monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(404))
+    with pytest.raises(GitHubActionsError):
+        _client().get_file_content("outreach/templates/X/intro_A.txt")
+
+
+def test_get_file_content_raises_on_other_failures(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get",
+                         lambda *a, **kw: _fake_response(500, text="Internal Server Error"))
+    with pytest.raises(GitHubActionsError):
+        _client().get_file_content("outreach/templates/X/intro_A.txt")
+
+
+# ---------- get_file_content_or_none ----------
+
+def test_get_file_content_or_none_decodes_base64_correctly(monkeypatch):
     import base64
     real_content = "sales2:\n  slot: 1\n  address: a@b.com\n"
     encoded = base64.b64encode(real_content.encode("utf-8")).decode("ascii")
@@ -476,21 +508,21 @@ def test_get_file_content_decodes_base64_correctly(monkeypatch):
         return _fake_response(200, {"content": encoded, "sha": "abc123"})
 
     monkeypatch.setattr(github_client.requests, "get", _fake_get)
-    result = _client().get_file_content("outreach/config/email_account_slots.yaml")
+    result = _client().get_file_content_or_none("outreach/config/email_account_slots.yaml")
     assert result == real_content
 
 
-def test_get_file_content_returns_none_when_missing(monkeypatch):
+def test_get_file_content_or_none_returns_none_when_missing(monkeypatch):
     monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(404))
-    result = _client().get_file_content("outreach/config/email_account_slots.yaml")
+    result = _client().get_file_content_or_none("outreach/config/email_account_slots.yaml")
     assert result is None
 
 
-def test_get_file_content_raises_on_other_failures(monkeypatch):
+def test_get_file_content_or_none_raises_on_other_failures(monkeypatch):
     monkeypatch.setattr(github_client.requests, "get",
                          lambda *a, **kw: _fake_response(500, text="Internal Server Error"))
     with pytest.raises(GitHubActionsError):
-        _client().get_file_content("outreach/config/email_account_slots.yaml")
+        _client().get_file_content_or_none("outreach/config/email_account_slots.yaml")
 
 
 # ---------- list_directory_files ----------
