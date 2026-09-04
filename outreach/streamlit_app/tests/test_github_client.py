@@ -491,3 +491,38 @@ def test_get_file_content_raises_on_other_failures(monkeypatch):
                          lambda *a, **kw: _fake_response(500, text="Internal Server Error"))
     with pytest.raises(GitHubActionsError):
         _client().get_file_content("outreach/config/email_account_slots.yaml")
+
+
+# ---------- list_directory_files ----------
+
+def test_list_directory_files_returns_filenames_only(monkeypatch):
+    entries = [
+        {"name": "intro_A.txt", "type": "file"},
+        {"name": "intro_B.txt", "type": "file"},
+        {"name": "subfolder", "type": "dir"},
+    ]
+    monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(200, entries))
+    result = _client().list_directory_files("outreach/streamlit_app/campaigns/X")
+    assert result == ["intro_A.txt", "intro_B.txt"]
+
+
+def test_list_directory_files_returns_empty_list_when_directory_missing(monkeypatch):
+    """A brand-new campaign with nothing committed yet is normal, not an
+    error — must return [], never raise."""
+    monkeypatch.setattr(github_client.requests, "get", lambda *a, **kw: _fake_response(404))
+    result = _client().list_directory_files("outreach/streamlit_app/campaigns/NewCampaign")
+    assert result == []
+
+
+def test_list_directory_files_raises_when_path_is_a_file_not_a_directory(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get",
+                         lambda *a, **kw: _fake_response(200, {"name": "intro_A.txt", "type": "file"}))
+    with pytest.raises(GitHubActionsError, match="is a file, not a directory"):
+        _client().list_directory_files("outreach/streamlit_app/campaigns/X/intro_A.txt")
+
+
+def test_list_directory_files_raises_on_other_failures(monkeypatch):
+    monkeypatch.setattr(github_client.requests, "get",
+                         lambda *a, **kw: _fake_response(500, text="Internal Server Error"))
+    with pytest.raises(GitHubActionsError):
+        _client().list_directory_files("outreach/streamlit_app/campaigns/X")
