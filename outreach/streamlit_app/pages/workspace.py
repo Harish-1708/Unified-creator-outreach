@@ -1636,48 +1636,71 @@ with tabs[7]:
         dm_campaign_rows = [r for r in shortlist_records_dm if r.get("Campaign") == discovery_campaign]
         dm_rows = crl.filter_creator_rows(dm_campaign_rows, "DM")
 
-        if not dm_rows:
+        # A creator approved for DM shows up on Master INSTANTLY (Save
+        # Decision writes there directly), but the actual draft/status
+        # tracking fields only exist once Sync Shortlist has generated
+        # them — there's a real gap between "routed" and "ready to work
+        # with here". Rather than the tab going completely silent during
+        # that gap (which is exactly the bug this replaces — a creator
+        # correctly shown as Approved/DM on the Data tab, but invisible
+        # here with no explanation), show those specifically as
+        # "pending sync" instead of omitting them entirely.
+        dm_master_rows = crl.filter_creator_rows(campaign_rows, "DM")
+        shortlist_dm_keys = {r.get("dedup_key") for r in dm_rows}
+        pending_sync_rows = [r for r in dm_master_rows if r.get("dedup_key") not in shortlist_dm_keys]
+
+        if not dm_rows and not pending_sync_rows:
             st.info("No creators routed to DM yet for this campaign.")
         else:
-            status_groups = {}
-            for r in dm_rows:
-                status = r.get("dm_status", "").strip() or "pending_reasoning"
-                status_groups.setdefault(status, []).append(r)
-            for status in crl.DM_STATUS_OPTIONS + ["pending_reasoning"]:
-                rows = status_groups.get(status)
-                if not rows:
-                    continue
-                with st.expander(f"{status} ({len(rows)})",
-                                 expanded=(status in ("Not Contacted", "Draft Ready"))):
-                    for r in rows:
+            if pending_sync_rows:
+                with st.expander(f"⏳ Pending Sync ({len(pending_sync_rows)})", expanded=True):
+                    st.caption("Approved for DM, but Sync Shortlist hasn't generated a draft for these "
+                               "yet — run it from Settings, then they'll appear below with the rest.")
+                    for r in pending_sync_rows:
                         st.write(f"**{r.get('dedup_key', '—')}** · {r.get('platform', '—')}")
 
-            st.divider()
-            st.subheader("Update a Creator")
-            dm_options = [r["dedup_key"] for r in dm_rows if r.get("dedup_key")]
-            selected_dm_key = st.selectbox("Creator", dm_options, key="ws_dm_creator_select")
-            selected_dm_row = next((r for r in dm_rows if r["dedup_key"] == selected_dm_key), {})
-
-            draft = selected_dm_row.get("dm_draft", "")
-            if draft:
-                st.code(draft, language=None)
+            if not dm_rows:
+                st.caption("Nothing else routed yet.")
             else:
-                st.caption("No draft yet — run 'Draft DMs' for this campaign first.")
+                status_groups = {}
+                for r in dm_rows:
+                    status = r.get("dm_status", "").strip() or "pending_reasoning"
+                    status_groups.setdefault(status, []).append(r)
+                for status in crl.DM_STATUS_OPTIONS + ["pending_reasoning"]:
+                    rows = status_groups.get(status)
+                    if not rows:
+                        continue
+                    with st.expander(f"{status} ({len(rows)})",
+                                     expanded=(status in ("Not Contacted", "Draft Ready"))):
+                        for r in rows:
+                            st.write(f"**{r.get('dedup_key', '—')}** · {r.get('platform', '—')}")
 
-            current_dm_status = selected_dm_row.get("dm_status", "").strip() or "Not Contacted"
-            idx = crl.DM_STATUS_OPTIONS.index(current_dm_status) if current_dm_status in crl.DM_STATUS_OPTIONS else 0
-            new_dm_status = st.selectbox("Status", crl.DM_STATUS_OPTIONS, index=idx, key="ws_dm_status_select")
-            new_dm_notes = st.text_area("Notes (optional)", key="ws_dm_notes_input")
+                st.divider()
+                st.subheader("Update a Creator")
+                dm_options = [r["dedup_key"] for r in dm_rows if r.get("dedup_key")]
+                selected_dm_key = st.selectbox("Creator", dm_options, key="ws_dm_creator_select")
+                selected_dm_row = next((r for r in dm_rows if r["dedup_key"] == selected_dm_key), {})
 
-            if st.button("Save", type="primary", key="ws_save_dm_status"):
-                try:
-                    client = _get_github_client()
-                    client.dispatch_workflow(config.WORKFLOW_UPDATE_DM_STATUS, {
-                        "creator_key": selected_dm_key,
-                        "campaign": discovery_campaign,
-                        "dm_status": new_dm_status,
-                        "dm_notes": new_dm_notes,
-                    })
-                    st.success("Dispatched — check 'Update DM Status' in the Actions tab.")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Couldn't dispatch: {exc}")
+                draft = selected_dm_row.get("dm_draft", "")
+                if draft:
+                    st.code(draft, language=None)
+                else:
+                    st.caption("No draft yet — run 'Draft DMs' for this campaign first.")
+
+                current_dm_status = selected_dm_row.get("dm_status", "").strip() or "Not Contacted"
+                idx = crl.DM_STATUS_OPTIONS.index(current_dm_status) if current_dm_status in crl.DM_STATUS_OPTIONS else 0
+                new_dm_status = st.selectbox("Status", crl.DM_STATUS_OPTIONS, index=idx, key="ws_dm_status_select")
+                new_dm_notes = st.text_area("Notes (optional)", key="ws_dm_notes_input")
+
+                if st.button("Save", type="primary", key="ws_save_dm_status"):
+                    try:
+                        client = _get_github_client()
+                        client.dispatch_workflow(config.WORKFLOW_UPDATE_DM_STATUS, {
+                            "creator_key": selected_dm_key,
+                            "campaign": discovery_campaign,
+                            "dm_status": new_dm_status,
+                            "dm_notes": new_dm_notes,
+                        })
+                        st.success("Dispatched — check 'Update DM Status' in the Actions tab.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Couldn't dispatch: {exc}")
