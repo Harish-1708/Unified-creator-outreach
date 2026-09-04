@@ -40,8 +40,8 @@ if config.REPO_ROOT not in sys.path:
 from github_client import GitHubClient, GitHubActionsError  # noqa: E402
 from preview_logic import list_campaigns, get_campaign_cfg  # noqa: E402
 from data_import_logic import (  # noqa: E402
-    KNOWN_FIELDS, parse_csv_bytes, build_default_mapping, apply_mapping, validate_mapping,
-    count_valid_rows, build_import_payload, import_payload_path, payload_to_bytes,
+    KNOWN_FIELDS, NEW_CUSTOM_FIELD_OPTION, parse_csv_bytes, build_default_mapping, apply_mapping,
+    validate_mapping, count_valid_rows, build_import_payload, import_payload_path, payload_to_bytes,
     validate_custom_field_name, find_duplicate_columns, build_full_lead_table,
 )
 from sheets_readonly import ReadOnlySheetsConnector  # noqa: E402
@@ -1186,6 +1186,9 @@ with tabs[3]:
                                                                       f"from {cname} (via Workspace, by "
                                                                       f"{current_user()})")
                                 st.success(f"Variant {variant_to_delete} deleted from {len(paths)} stage(s).")
+                        except outreach.ConfigError as exc:
+                            st.error(f"Couldn't verify the campaign's current structure before deleting — "
+                                     f"nothing was changed: {exc}")
                         except GitHubActionsError as exc:
                             st.error(f"Failed: {exc}")
                 else:
@@ -1220,6 +1223,9 @@ with tabs[3]:
                                                                       f"from {cname} (via Workspace, by "
                                                                       f"{current_user()})")
                                 st.success(f"'{last_stage['name']}' deleted.")
+                        except outreach.ConfigError as exc:
+                            st.error(f"Couldn't verify the campaign's current structure before deleting — "
+                                     f"nothing was changed: {exc}")
                         except GitHubActionsError as exc:
                             st.error(f"Failed: {exc}")
                 else:
@@ -1260,13 +1266,13 @@ with tabs[3]:
                     for idx, col in enumerate(columns):
                         default = default_mapping.get(col) or "-- Skip --"
                         target_options = ["-- Skip --"] + KNOWN_FIELDS + custom_columns_known + \
-                            ["➕ New custom field..."]
+                            [NEW_CUSTOM_FIELD_OPTION]
                         # If the zero-click default is a genuinely new
                         # field (not in any existing option), show it as
                         # the pre-filled "New custom field" choice rather
                         # than silently falling back to index 0 (Skip).
                         if default not in target_options:
-                            target_options = target_options[:-1] + [default, "➕ New custom field..."]
+                            target_options = target_options[:-1] + [default, NEW_CUSTOM_FIELD_OPTION]
                         default_idx = target_options.index(default) if default in target_options else 0
                         # Keyed by POSITION and name together — a CSV with
                         # a duplicate column name must never produce two
@@ -1276,7 +1282,7 @@ with tabs[3]:
                         # above already flagged.
                         choice = st.selectbox(col, target_options, index=default_idx,
                                                key=f"ws_import_map_{idx}_{col}")
-                        if choice == "➕ New custom field...":
+                        if choice == NEW_CUSTOM_FIELD_OPTION:
                             new_name = st.text_input(f"New field name for '{col}'",
                                                       key=f"ws_import_newfield_{idx}_{col}")
                             new_field_names[col] = new_name
