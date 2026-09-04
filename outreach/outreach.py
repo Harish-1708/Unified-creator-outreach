@@ -708,6 +708,41 @@ class SheetsConnector:
         if updates:
             self.master_ws.batch_update(updates)
 
+    def ensure_master_header_includes(self, column_names: List[str]) -> None:
+        """Widens the header row to include any of column_names not
+        already present — existing columns and their positions are never
+        touched, new ones are always appended at the end. Any caller that
+        appends a row with arbitrary extra fields (a CSV import with
+        custom columns) needs this called ONCE, with every field name
+        across the WHOLE batch, before the first append — silently
+        dropping an unknown field is the wrong default when the entire
+        point of a mapping UI is to let new field names appear at runtime.
+
+        Also grows the sheet's underlying grid width first if needed — a
+        Sheet's grid size is fixed at however many columns it had when
+        the tab was first created; writing to a column beyond that raises
+        a hard API error, not a silent failure. Widening the header row
+        and having room for a wider header row are two separate facts;
+        this never assumes the second follows from the first.
+        """
+        header = self.master_ws.row_values(1)
+        missing = [c for c in column_names if c not in header]
+        if not missing:
+            return
+
+        needed_col_count = len(header) + len(missing)
+        if self.master_ws.col_count < needed_col_count:
+            self.master_ws.resize(cols=needed_col_count + 10)
+
+        updates = []
+        for i, col_name in enumerate(missing):
+            col_index = len(header) + i + 1
+            updates.append({
+                "range": self._gspread.utils.rowcol_to_a1(1, col_index),
+                "values": [[col_name]],
+            })
+        self.master_ws.batch_update(updates)
+
     def append_lead(self, fields: Dict[str, str]) -> None:
         """Appends ONE new row. Unlike update_lead_fields, this is NOT
         restricted to MASTER_COLUMNS — it builds the row against whatever
@@ -1843,6 +1878,17 @@ def import_leads(sheets: SheetsConnector, campaign_name: str, new_leads: List[Di
     existing_ids = [int(l["LeadID"]) for l in existing if str(l.get("LeadID", "")).strip().isdigit()]
     next_id = (max(existing_ids) + 1) if existing_ids else 1
     existing_emails = {(l.get("Email") or "").strip().lower() for l in existing if (l.get("Email") or "").strip()}
+
+    # Widen the header ONCE, up front, covering every field name across
+    # the WHOLE batch — not just the first row's fields, since different
+    # rows in one CSV can populate different custom columns. Must happen
+    # before any append_lead call, which only ever fills in columns that
+    # already exist.
+    all_field_names = set()
+    for lead in new_leads:
+        all_field_names.update(lead.keys())
+    if all_field_names:
+        sheets.ensure_master_header_includes(sorted(all_field_names))
 
     imported = 0
     skipped_duplicate = 0
