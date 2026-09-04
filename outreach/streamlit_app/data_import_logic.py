@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 KNOWN_FIELDS = ["FirstName", "LastName", "Email", "Company"]
+NEW_CUSTOM_FIELD_OPTION = "➕ New custom field..."
 
 
 def parse_csv_bytes(raw_bytes: bytes) -> Tuple[List[str], List[Dict[str, str]]]:
