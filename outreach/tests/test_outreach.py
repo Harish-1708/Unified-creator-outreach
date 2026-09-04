@@ -148,14 +148,17 @@ def test_intro_stage_already_sent_is_excluded():
     assert len(eligible) == 0
 
 
-def test_pending_approval_is_excluded():
+def test_pending_approval_no_longer_excluded():
+    """Approval was removed as an eligibility gate entirely — a lead with
+    Approval='Pending' but a valid email is now just as eligible as any
+    other lead. Approval stays a real column, purely informational."""
     eligible = outreach.get_eligible_leads([make_lead(Approval="Pending")], STAGES, 0)
-    assert len(eligible) == 0
+    assert len(eligible) == 1
 
 
-def test_blank_approval_behaves_as_not_approved():
+def test_blank_approval_no_longer_excluded():
     eligible = outreach.get_eligible_leads([make_lead(Approval="")], STAGES, 0)
-    assert len(eligible) == 0
+    assert len(eligible) == 1
 
 
 def test_followup1_requires_intro_sent_and_wait_period():
@@ -206,12 +209,14 @@ def test_duplicate_email_rows_does_not_affect_leads_with_unique_emails():
 
 
 def test_duplicate_email_rows_dedup_only_applies_among_leads_that_pass_other_checks():
-    # Row1 fails on Approval and is filtered out BEFORE the dedup step —
-    # it never "claims" the email slot, so row2 (which does pass) is
-    # correctly still eligible. Dedup only applies among leads that
-    # already passed every other check, not globally by row order.
-    row1 = make_lead(_row=2, LeadID="L1", Email="same@abc.com", Approval="No")
-    row2 = make_lead(_row=3, LeadID="L2", Email="same@abc.com", Approval="Yes")
+    # Row1 fails on missing email (Approval no longer gates eligibility
+    # at all, so that can't be used to demonstrate this anymore) and is
+    # filtered out BEFORE the dedup step — it never "claims" the email
+    # slot, so row2 (which does pass) is correctly still eligible. Dedup
+    # only applies among leads that already passed every other check,
+    # not globally by row order.
+    row1 = make_lead(_row=2, LeadID="L1", Email="")
+    row2 = make_lead(_row=3, LeadID="L2", Email="same@abc.com")
     eligible = outreach.get_eligible_leads([row1, row2], STAGES, 0)
     assert len(eligible) == 1
     assert eligible[0]["LeadID"] == "L2"
@@ -266,10 +271,13 @@ def test_ignore_wait_days_still_respects_every_other_eligibility_rule():
     already_sent_this_stage = make_lead(IntroSentAt=recent, FollowUp1SentAt=recent)
     replied = make_lead(IntroSentAt=recent, ReplyStatus="Replied")
     stopped = make_lead(IntroSentAt=recent, Status="Stopped - Bounced")
-    not_approved = make_lead(IntroSentAt=recent, Approval="No")
+    # Approval is no longer an eligibility rule at all, so it can't be
+    # used here anymore — a lead with Approval="No" but nothing else
+    # disqualifying it IS now eligible, which is exactly the fix in
+    # Part 5. This test covers the rules that are still real gates.
 
     eligible = outreach.get_eligible_leads(
-        [already_sent_this_stage, replied, stopped, not_approved], STAGES, 1, ignore_wait_days=True)
+        [already_sent_this_stage, replied, stopped], STAGES, 1, ignore_wait_days=True)
     assert eligible == []
 
 
