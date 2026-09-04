@@ -8,7 +8,8 @@ from data_import_logic import (
     parse_csv_bytes, build_default_mapping, apply_mapping, validate_mapping,
     count_valid_rows, build_import_payload, import_payload_path,
     build_removal_payload, removal_payload_path, payload_to_bytes,
-    filter_leads, search_leads,
+    filter_leads, search_leads, validate_custom_field_name, find_duplicate_columns,
+    build_full_lead_table,
     FILTER_ALL, FILTER_PENDING_APPROVAL, FILTER_IN_PROGRESS, FILTER_REPLIED,
     FILTER_BOUNCED, FILTER_REMOVED,
 )
@@ -49,18 +50,96 @@ def test_default_mapping_matches_known_fields_case_and_punctuation_insensitive()
 def test_default_mapping_matches_custom_columns():
     mapping = build_default_mapping(["Job Title", "Website"], ["Title", "Website"])
     assert mapping["Website"] == "Website"
-    # "Job Title" doesn't normalize-match "Title" (extra word) — stays unmapped, which is correct/safe
-    assert mapping["Job Title"] == ""
+    # "Job Title" doesn't normalize-match "Title" (extra word) — defaults to a
+    # new custom field using its own name, not Skip (zero-click default).
+    assert mapping["Job Title"] == "Job Title"
 
 
-def test_default_mapping_leaves_unrecognized_columns_unmapped():
+def test_default_mapping_unrecognized_columns_default_to_new_custom_field_named_after_themselves():
+    """The zero-click-default fix: bringing in every column should take
+    zero clicks for the common case, not one 'Skip' per unmatched
+    column."""
     mapping = build_default_mapping(["Random Column"], [])
-    assert mapping["Random Column"] == ""
+    assert mapping["Random Column"] == "Random Column"
+
+
+def test_default_mapping_skips_when_own_name_collides_with_reserved_column():
+    """The one deliberate exception: a column whose own name IS a
+    reserved system column must default to Skip, not auto-map to
+    itself — mapping a CSV's own 'Status' column onto the system's
+    tracked Status column would silently corrupt real send-tracking
+    data on the next import."""
+    mapping = build_default_mapping(["Status", "Client"], [], reserved_names=["Status", "IntroSentAt"])
+    assert mapping["Status"] == ""
+    assert mapping["Client"] == "Client"  # unaffected — doesn't collide
 
 
 def test_default_mapping_prefers_known_field_over_same_named_custom_column():
     mapping = build_default_mapping(["Email"], ["Email"])
     assert mapping["Email"] == "Email"  # still correct either way, but exercises the precedence path
+
+
+# ---------- validate_custom_field_name ----------
+
+def test_validate_custom_field_name_rejects_blank():
+    assert validate_custom_field_name("", ["Status"]) is not None
+    assert validate_custom_field_name("   ", ["Status"]) is not None
+
+
+def test_validate_custom_field_name_rejects_reserved_name_case_insensitively():
+    assert validate_custom_field_name("status", ["Status", "IntroSentAt"]) is not None
+    assert validate_custom_field_name("STATUS", ["Status"]) is not None
+
+
+def test_validate_custom_field_name_accepts_a_genuinely_new_name():
+    assert validate_custom_field_name("Client", ["Status", "IntroSentAt"]) is None
+
+
+# ---------- find_duplicate_columns ----------
+
+def test_find_duplicate_columns_detects_repeated_name():
+    assert find_duplicate_columns(["Email", "Last Contact Date", "Last Contact Date"]) == ["Last Contact Date"]
+
+
+def test_find_duplicate_columns_empty_when_all_unique():
+    assert find_duplicate_columns(["Email", "FirstName", "LastName"]) == []
+
+
+def test_find_duplicate_columns_detects_multiple_distinct_duplicates():
+    result = find_duplicate_columns(["A", "A", "B", "B", "C"])
+    assert result == ["A", "B"]
+
+
+# ---------- build_full_lead_table ----------
+
+def test_build_full_lead_table_covers_every_field_across_all_leads():
+    """The actual fix: a custom column present on SOME leads but not
+    others must still appear as a column — with blanks, not be limited
+    to a fixed hardcoded subset."""
+    leads = [{"Email": "a@abc.com", "Client": "DudeRobe"}, {"Email": "b@abc.com", "Product": "Robe"}]
+    table = build_full_lead_table(leads)
+    assert set(table.keys()) == {"Email", "Client", "Product"}
+    assert table["Client"] == ["DudeRobe", ""]
+    assert table["Product"] == ["", "Robe"]
+
+
+def test_build_full_lead_table_excludes_internal_row_field():
+    leads = [{"Email": "a@abc.com", "_row": 2}]
+    table = build_full_lead_table(leads)
+    assert "_row" not in table
+
+
+def test_build_full_lead_table_follows_given_header_order():
+    leads = [{"Email": "a@abc.com", "Client": "DudeRobe", "FirstName": "Sam"}]
+    table = build_full_lead_table(leads, header_order=["LeadID", "FirstName", "Email", "Client"])
+    assert list(table.keys()) == ["FirstName", "Email", "Client"]  # LeadID absent from data, correctly omitted
+
+
+def test_build_full_lead_table_falls_back_to_alphabetical_for_fields_not_in_header_order():
+    leads = [{"Email": "a@abc.com", "Zebra": "z", "Apple": "a"}]
+    table = build_full_lead_table(leads, header_order=["Email"])
+    keys_after_email = list(table.keys())[1:]
+    assert keys_after_email == ["Apple", "Zebra"]  # alphabetical, not CSV/dict order
 
 
 # ---------- apply_mapping ----------
