@@ -1535,7 +1535,22 @@ with tabs[5]:
                     try:
                         client = _get_github_client()
                         client.dispatch_workflow(config.WORKFLOW_SYNC_ASANA, {"campaign": cname})
-                        st.success(f"Asana sync triggered for '{cname}'. Check the Actions tab for progress.")
+                        dm_dispatched = False
+                        if HAS_DISCOVERY and discovery_campaign:
+                            try:
+                                client.dispatch_workflow(config.WORKFLOW_SYNC_DM_ASANA, {
+                                    "campaign": discovery_campaign,
+                                    "asana_project_name": asana_settings.get("project_name", ""),
+                                })
+                                dm_dispatched = True
+                            except Exception as exc:  # noqa: BLE001
+                                st.warning(f"Email sync triggered, but DM sync failed to dispatch: {exc}")
+                        if dm_dispatched:
+                            st.success(f"Asana sync triggered for '{cname}' — both email and DM creators. "
+                                       f"Check the Actions tab for progress.")
+                        else:
+                            st.success(f"Asana sync triggered for '{cname}' (email only — no Discovery "
+                                       f"campaign selected for DM). Check the Actions tab for progress.")
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Failed to trigger sync: {exc}")
             else:
