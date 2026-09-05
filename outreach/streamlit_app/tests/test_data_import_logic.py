@@ -74,6 +74,24 @@ def test_default_mapping_skips_when_own_name_collides_with_reserved_column():
     assert mapping["Client"] == "Client"  # unaffected — doesn't collide
 
 
+def test_default_mapping_strips_whitespace_from_new_custom_field_default():
+    """A column header with stray leading/trailing whitespace must not
+    become a custom field name with that same whitespace baked in —
+    ' Client ' and 'Client' should be treated as the same field, not
+    two different ones."""
+    mapping = build_default_mapping([" Client "], [])
+    assert mapping[" Client "] == "Client"
+
+
+def test_default_mapping_reserved_check_ignores_whitespace():
+    """A column named ' Status ' (with stray whitespace) must still be
+    recognized as colliding with the reserved 'Status' column — without
+    stripping before the comparison, this collision could be missed,
+    risking a silent overwrite of real tracking data."""
+    mapping = build_default_mapping([" Status "], [], reserved_names=["Status"])
+    assert mapping[" Status "] == ""
+
+
 def test_default_mapping_prefers_known_field_over_same_named_custom_column():
     mapping = build_default_mapping(["Email"], ["Email"])
     assert mapping["Email"] == "Email"  # still correct either way, but exercises the precedence path
@@ -180,7 +198,12 @@ def test_count_valid_rows_only_counts_rows_with_email():
 
 def test_build_import_payload_shape():
     payload = build_import_payload([{"Email": "a@abc.com"}])
-    assert payload == {"leads": [{"Email": "a@abc.com"}]}
+    assert payload == {"leads": [{"Email": "a@abc.com"}], "allow_duplicate_emails": False}
+
+
+def test_build_import_payload_allow_duplicate_emails_flag():
+    payload = build_import_payload([{"Email": "a@abc.com"}], allow_duplicate_emails=True)
+    assert payload["allow_duplicate_emails"] is True
 
 
 def test_import_payload_path_format():
