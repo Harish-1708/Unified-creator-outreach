@@ -24,7 +24,7 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
-import yaml
+from settings_logic import override_to_yaml_bytes  # noqa: E402
 
 CAMPAIGN_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 VARIANT_LETTERS = ["A", "B", "C", "D"]
@@ -118,8 +118,7 @@ def build_campaign_duplication_files(new_campaign_name: str, source_template_fil
         duplicated_override = build_duplicated_config_override(source_raw_override)
         files.append({
             "path": f"outreach/config/campaigns/{new_campaign_name}.yaml",
-            "content": yaml.safe_dump(duplicated_override, sort_keys=False,
-                                       default_flow_style=False).encode("utf-8"),
+            "content": override_to_yaml_bytes(duplicated_override),
         })
 
     return files
