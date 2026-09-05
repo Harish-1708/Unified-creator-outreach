@@ -1,0 +1,70 @@
+name: Auto Send
+
+# This is what makes a campaign's sending window actually mean something.
+# Without a scheduled trigger like this one, "window_start"/"window_end" in
+# a campaign's schedule config is just a check that sits there until a
+# human happens to click "Send Now" while it's true — not real automation.
+#
+# Every run here calls `outreach.py auto-send-all`, which loops over every
+# campaign, skips anything that isn't Running (Draft/Paused/Deleted are
+# never touched), and for each Running campaign, attempts every stage in
+# turn. send_batch's own existing checks (sending window, daily limit,
+# per-lead eligibility) decide whether anything actually goes out — most
+# stages on most runs will correctly do nothing, and that's not a failure,
+# just nothing being due yet.
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Every 30 minutes, by request — tighter catches a window opening
+    # sooner; looser uses fewer Actions minutes. GitHub Actions cron has
+    # its own scheduling delay (typically a few minutes under load), so
+    # treat "every 30" as "within roughly 30-40 minutes of the window
+    # opening", not to-the-minute precision.
+    - cron: "*/30 * * * *"
+
+# Two overlapping runs must never happen here specifically: send_batch
+# reads "how many sent today" ONCE at the start of a run to compute the
+# remaining daily budget — two runs racing each other could both see the
+# same "3 of 20 sent today" snapshot and both decide the same 17 slots are
+# available, sending real duplicate emails to the same leads. Queuing the
+# second run (never cancelling or running both at once) is what prevents
+# this.
+concurrency:
+  group: auto-send
+  cancel-in-progress: false
+
+jobs:
+  auto-send:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Auto send
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EMAIL_ACCOUNTS_JSON: ${{ secrets.EMAIL_ACCOUNTS_JSON }}
+          EMAIL_ACCOUNT_SLOT_1: ${{ secrets.EMAIL_ACCOUNT_SLOT_1 }}
+          EMAIL_ACCOUNT_SLOT_2: ${{ secrets.EMAIL_ACCOUNT_SLOT_2 }}
+          EMAIL_ACCOUNT_SLOT_3: ${{ secrets.EMAIL_ACCOUNT_SLOT_3 }}
+          EMAIL_ACCOUNT_SLOT_4: ${{ secrets.EMAIL_ACCOUNT_SLOT_4 }}
+          EMAIL_ACCOUNT_SLOT_5: ${{ secrets.EMAIL_ACCOUNT_SLOT_5 }}
+          EMAIL_ACCOUNT_SLOT_6: ${{ secrets.EMAIL_ACCOUNT_SLOT_6 }}
+          EMAIL_ACCOUNT_SLOT_7: ${{ secrets.EMAIL_ACCOUNT_SLOT_7 }}
+          EMAIL_ACCOUNT_SLOT_8: ${{ secrets.EMAIL_ACCOUNT_SLOT_8 }}
+          EMAIL_ACCOUNT_SLOT_9: ${{ secrets.EMAIL_ACCOUNT_SLOT_9 }}
+          EMAIL_ACCOUNT_SLOT_10: ${{ secrets.EMAIL_ACCOUNT_SLOT_10 }}
+        run: |
+          set -o pipefail
+          python outreach.py auto-send-all | tee auto_send_output.txt
+      - name: Add to job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat auto_send_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
