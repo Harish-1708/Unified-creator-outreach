@@ -1888,13 +1888,29 @@ def backfill_thread_subjects(campaign_cfg: Dict, leads: List[Dict]) -> List[Dict
     return results
 
 
-def import_leads(sheets: SheetsConnector, campaign_name: str, new_leads: List[Dict[str, str]]) -> Dict[str, int]:
+def import_leads(sheets: SheetsConnector, campaign_name: str, new_leads: List[Dict[str, str]],
+                  allow_duplicate_emails: bool = False) -> Dict[str, int]:
     """Appends new_leads as new Master Sheet rows. Skips any row with no
-    Email (mandatory everywhere else in this system) and any row whose
-    Email already exists among current leads (case-insensitive) — the
-    same "first row wins" assumption find_duplicate_email_leads already
-    enforces elsewhere, just applied at import time instead of left for
-    that check to flag later.
+    Email (mandatory everywhere else in this system) and, by default,
+    any row whose Email already exists among current leads
+    (case-insensitive) — the same "first row wins" assumption
+    find_duplicate_email_leads already enforces elsewhere, just applied
+    at import time instead of left for that check to flag later.
+
+    allow_duplicate_emails=True deliberately turns that second check
+    off — for a real, recurring case: contacting the same creator again
+    for a genuinely different video (its own Video File / Refunnel Link
+    / etc.), tracked as its own separate Asana task, without the
+    automated sender ever emailing that person a second time. This is
+    safe to allow because sending itself already has its own,
+    independent protection: find_duplicate_email_leads / get_eligible_
+    leads only ever consider the FIRST (lowest row number) lead for a
+    given email eligible to actually be emailed — every later row
+    sharing that email is automatically excluded from sending, always,
+    regardless of this flag. Asana sync has no such restriction at
+    all — it operates strictly per ROW (via each row's own
+    AsanaTaskGID), so a second row for the same email correctly gets
+    its own separate task.
 
     Every imported lead's Approval is left BLANK (Pending) unless the
     caller explicitly set it in that row's dict — a bulk import should
@@ -1925,7 +1941,7 @@ def import_leads(sheets: SheetsConnector, campaign_name: str, new_leads: List[Di
         if not email:
             skipped_no_email += 1
             continue
-        if email.lower() in existing_emails:
+        if not allow_duplicate_emails and email.lower() in existing_emails:
             skipped_duplicate += 1
             continue
         row = dict(lead)
@@ -3017,11 +3033,14 @@ def cmd_backfill_thread_subject(args):
 
 
 def cmd_import_leads(args):
-    """Reads {"leads": [{...}, ...]} from --file and appends them to the
-    Master Sheet. This is the ONLY thing that ever writes to the Master
-    Sheet from a bulk-import path — invoked by import_leads.yml after
-    Streamlit commits the mapped payload file, never called with
-    Streamlit-supplied data any other way."""
+    """Reads {"leads": [{...}, ...], "allow_duplicate_emails": bool} from
+    --file and appends them to the Master Sheet. This is the ONLY thing
+    that ever writes to the Master Sheet from a bulk-import path —
+    invoked by import_leads.yml after Streamlit commits the mapped
+    payload file, never called with Streamlit-supplied data any other
+    way. "allow_duplicate_emails" defaults to False if absent from the
+    payload — every pre-existing payload file (written before this flag
+    existed) is interpreted exactly as before."""
     campaign_cfg = get_campaign(args.campaign)
     sheets = _connect_sheets(campaign_cfg)
     with open(args.file, "r", encoding="utf-8") as f:
@@ -3030,7 +3049,8 @@ def cmd_import_leads(args):
     if not new_leads:
         print("No leads in payload file — nothing to do.")
         return
-    summary = import_leads(sheets, args.campaign, new_leads)
+    summary = import_leads(sheets, args.campaign, new_leads,
+                            allow_duplicate_emails=bool(payload.get("allow_duplicate_emails", False)))
     print(f"Imported {summary['imported']} lead(s).")
     if summary["skipped_duplicate"]:
         print(f"Skipped {summary['skipped_duplicate']} duplicate email(s) (already in the Master Sheet).")
@@ -3394,6 +3414,34 @@ def _match_asana_option(value: str, options: Dict[str, str]) -> Optional[str]:
     return None
 
 
+def _parse_date_to_iso(value_str: str) -> Optional[str]:
+    """Converts a date string in any of several common Sheet-typed
+    formats to Asana's required ISO 8601 "YYYY-MM-DD". A raw Sheet cell
+    holding a date is commonly displayed/exported in the spreadsheet's
+    own locale format (e.g. "09/03/26", US-style MM/DD/YY) — Asana's
+    API silently rejects (or misinterprets) anything that isn't ISO,
+    and the previous approach of just taking the first 10 characters
+    only worked for a value that already happened to be ISO-formatted.
+    Returns None (field skipped, not guessed at) if nothing matches."""
+    value_str = value_str.strip()
+    candidate_formats = [
+        "%Y-%m-%d",    # already ISO — the common case for a value this
+                        # system itself wrote, left as a fast path
+        "%m/%d/%Y",    # 09/03/2026 — US-style, 4-digit year
+        "%m/%d/%y",    # 09/03/26 — US-style, 2-digit year (the reported case)
+        "%d/%m/%Y",    # 03/09/2026 — day-first, 4-digit year
+        "%d/%m/%y",    # 03/09/26 — day-first, 2-digit year
+        "%B %d, %Y",   # September 3, 2026
+        "%b %d, %Y",   # Sep 3, 2026
+    ]
+    for fmt in candidate_formats:
+        try:
+            return datetime.strptime(value_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
 def _apply_value_to_asana_field(payload: Dict[str, object], defn: Dict, value_str: str) -> None:
     field_type = defn["type"]
     if field_type == "text":
@@ -3404,7 +3452,9 @@ def _apply_value_to_asana_field(payload: Dict[str, object], defn: Dict, value_st
         except ValueError:
             pass
     elif field_type == "date":
-        payload[defn["gid"]] = {"date": value_str[:10]}
+        iso_date = _parse_date_to_iso(value_str)
+        if iso_date:
+            payload[defn["gid"]] = {"date": iso_date}
     elif field_type == "enum":
         option_gid = _match_asana_option(value_str, defn["options"])
         if option_gid:
