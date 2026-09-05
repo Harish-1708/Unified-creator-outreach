@@ -2920,6 +2920,68 @@ def cmd_send(args):
         print(f"  ERROR {r['email']}: [{r['error_type']}] {r['error']}")
 
 
+def cmd_auto_send_all(args):
+    """The scheduled trigger's entry point for automated sending — loops
+    over EVERY discovered campaign, and for each one that's actually
+    Running (status == "active"; Draft/Paused/Deleted are skipped
+    outright, never even attempted), sends every stage in turn. Each
+    stage's own send_batch call already enforces the sending window,
+    the daily limit, and every per-lead eligibility rule (correct wait
+    days passed, not already sent, etc.) — calling every stage on every
+    scheduled run is safe and idempotent: a stage with nothing due
+    right now is simply a no-op for that call, not an error.
+
+    One campaign's failure, or one stage being outside the sending
+    window, is reported but never blocks any other campaign or stage
+    in the same run — this is what lets a schedule window actually mean
+    something (leads that come due while the window is open get sent
+    automatically, without a human clicking anything), rather than
+    being a check nothing ever exercises."""
+    accounts = load_email_accounts()
+    any_running = False
+    any_errors = False
+
+    for campaign_name in discover_campaign_names():
+        try:
+            campaign_cfg = get_campaign(campaign_name)
+        except Exception as exc:  # noqa: BLE001 - a broken campaign config shouldn't sink the whole run
+            print(f"{campaign_name}: couldn't load config ({exc}) — skipped.")
+            any_errors = True
+            continue
+
+        if (campaign_cfg.get("status") or "active") != "active":
+            continue
+        any_running = True
+
+        try:
+            sheets = _connect_sheets(campaign_cfg)
+        except Exception as exc:  # noqa: BLE001 - one campaign's connection failure shouldn't block others
+            print(f"{campaign_name}: couldn't connect to its Sheet ({exc}).")
+            any_errors = True
+            continue
+
+        for stage in campaign_cfg["stages"]:
+            stage_name = stage["name"]
+            try:
+                results = send_batch(campaign_cfg, sheets, accounts, stage_name,
+                                      batch_size=campaign_cfg["sending"]["daily_limit"])
+                if results:
+                    sent = sum(1 for r in results if r.get("status") == "sent")
+                    print(f"{campaign_name} / {stage_name}: sent {sent} of {len(results)} attempted.")
+            except (CampaignPausedError, OutsideSendingWindowError) as exc:
+                # Expected, routine — not every stage of every campaign is
+                # due to send on every run. Not an error.
+                print(f"{campaign_name} / {stage_name}: skipped ({exc}).")
+            except Exception as exc:  # noqa: BLE001 - one stage's failure shouldn't block the rest
+                print(f"{campaign_name} / {stage_name}: FAILED ({exc}).")
+                any_errors = True
+
+    if not any_running:
+        print("No campaign is currently Running — nothing to do.")
+    if any_errors:
+        sys.exit(1)
+
+
 def cmd_backfill_thread_subject(args):
     """One-time migration command — see backfill_thread_subjects' docstring
     for exactly what this does and its accuracy caveat. Defaults to
@@ -3631,6 +3693,54 @@ def sync_campaign_to_asana(sheets: SheetsConnector, campaign_cfg: Dict, api_key:
     return {"created": created, "updated": updated, "skipped_no_email": skipped_no_email, "errors": errors}
 
 
+def cmd_set_lead_override(args):
+    """Sets a manual, per-lead override — sending status ("stop this
+    ONE lead without removing it") and/or Asana pipeline stage
+    ("Rights Secured" / "Declined / Dead" for a lead handled outside
+    the automated pipeline entirely) — found by email, not LeadID,
+    since that's what a human actually has on hand when looking at a
+    creator in the Data tab.
+
+    An empty string for either --status or --asana-stage explicitly
+    CLEARS that override (resumes normal automated sending; returns to
+    fully-automatic Asana stage tracking) — distinct from not passing
+    the flag at all, which leaves that field untouched."""
+    campaign_cfg = get_campaign(args.campaign)
+    sheets = _connect_sheets(campaign_cfg)
+    leads = sheets.get_all_leads()
+    email_lower = args.email.strip().lower()
+    matching = [l for l in leads if (l.get("Email") or "").strip().lower() == email_lower]
+    if not matching:
+        print(f"No lead found with email '{args.email}' in campaign '{args.campaign}'.")
+        sys.exit(1)
+    if len(matching) > 1:
+        print(f"NOTE: {len(matching)} leads share this email — updating only the first "
+              f"(row {matching[0]['_row']}).")
+    lead = matching[0]
+
+    updates = {}
+    if args.status is not None:
+        if args.status not in ("", STATUS_STOPPED_MANUAL):
+            print(f"ERROR: --status must be '' (resume normal sending) or '{STATUS_STOPPED_MANUAL}' "
+                  f"(stop sending to this lead only), got {args.status!r}.", file=sys.stderr)
+            sys.exit(1)
+        updates["Status"] = args.status
+    if args.asana_stage is not None:
+        if args.asana_stage and args.asana_stage.lower() not in _ASANA_STAGE_NAMES_BY_LOWER:
+            valid = ", ".join(sorted(_ASANA_STAGE_NAMES_BY_LOWER.values()))
+            print(f"ERROR: --asana-stage must be '' (resume automatic stage tracking) or one of: "
+                  f"{valid}. Got {args.asana_stage!r}.", file=sys.stderr)
+            sys.exit(1)
+        updates["ManualAsanaStage"] = args.asana_stage
+
+    if not updates:
+        print("Nothing to update — pass --status and/or --asana-stage.")
+        return
+
+    sheets.update_lead_fields(lead["_row"], updates)
+    print(f"Updated {args.email}: {updates}")
+
+
 def cmd_sync_asana(args):
     campaign_cfg = get_campaign(args.campaign)
     sheets = _connect_sheets(campaign_cfg)
@@ -3766,6 +3876,24 @@ def main():
                                        help="Sync every campaign with asana.enabled: true — one "
                                             "campaign's failure never blocks the rest")
     p_sync_asana_all.set_defaults(func=cmd_sync_asana_all)
+
+    p_auto_send_all = sub.add_parser("auto-send-all",
+                                      help="Send every stage due right now, for every Running campaign")
+    p_auto_send_all.set_defaults(func=cmd_auto_send_all)
+
+    p_set_override = sub.add_parser("set-lead-override",
+                                     help="Set a manual sending-status and/or Asana-stage override for one "
+                                          "lead, found by email")
+    p_set_override.add_argument("--campaign", required=True)
+    p_set_override.add_argument("--email", required=True)
+    p_set_override.add_argument("--status", default=None,
+                                 help="'' to resume normal sending, or 'Stopped - Manual' to stop sending "
+                                      "to only this lead. Omit to leave sending status untouched.")
+    p_set_override.add_argument("--asana-stage", default=None,
+                                 help="'' to resume automatic Asana stage tracking, or one of Sourced / "
+                                      "Outreach Sent / Follow-up / Negotiating / Rights Secured / "
+                                      "Declined / Dead. Omit to leave the Asana stage untouched.")
+    p_set_override.set_defaults(func=cmd_set_lead_override)
 
     p_remove = sub.add_parser("remove-leads",
                                help="Soft-remove leads (sets Status=Removed, never a hard delete) "
