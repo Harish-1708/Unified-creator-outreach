@@ -90,6 +90,16 @@ MASTER_COLUMNS = [
                                 # to Asana — checked before every future sync so a
                                 # lead never gets a second task created for it.
                                 # Never edit this by hand.
+    "ManualAsanaStage",        # Optional human override for this ONE lead's Asana
+                                # pipeline stage — e.g. "Rights Secured" or
+                                # "Declined / Dead". When set, a sync uses this
+                                # value instead of auto-deriving the stage from
+                                # send/reply history, and — unlike the "never move
+                                # a task already sitting in Rights Secured/Declined"
+                                # protection, which only looks at Asana's current
+                                # state — this can also apply on a brand-new task's
+                                # very first creation. Leave blank for normal,
+                                # fully-automatic stage tracking.
 ]
 # NOTE: this is the REQUIRED prefix of the Master header row. You may add
 # extra columns of your own AFTER these (e.g. "Industry", "JobTitle") and
@@ -171,6 +181,11 @@ APPROVAL_YES = "Yes"
 STATUS_STOPPED_REPLIED = "Stopped - Replied"
 STATUS_STOPPED_BOUNCED = "Stopped - Bounced"
 STATUS_STOPPED_REJECTED = "Stopped - Rejected"
+STATUS_STOPPED_MANUAL = "Stopped - Manual"  # a human stopped this ONE lead
+                            # on purpose — never sent automatically, distinct
+                            # from Removed: this lead stays fully visible in
+                            # the Data tab, it's just no longer eligible to
+                            # be sent to.
 STATUS_PAUSED = "Paused"
 STATUS_COMPLETED = "Completed"
 STATUS_REMOVED = "Removed"  # soft-remove from the Data tab — never a hard delete,
@@ -180,6 +195,7 @@ TERMINAL_STATUSES = {
     STATUS_STOPPED_REPLIED,
     STATUS_STOPPED_BOUNCED,
     STATUS_STOPPED_REJECTED,
+    STATUS_STOPPED_MANUAL,
     STATUS_PAUSED,
     STATUS_COMPLETED,
     STATUS_REMOVED,
@@ -642,34 +658,41 @@ def _get_or_create_ws(spreadsheet, gspread_module, title: str, required_header: 
     existing_header = ws.row_values(1)
     if not existing_header:
         ws.append_row(required_header)
-    elif len(existing_header) < len(required_header) and required_header[:len(existing_header)] == existing_header:
-        # A NEW required column was added since this tab was first
-        # created — existing_header is a valid PREFIX of what's required
-        # now, just shorter. Auto-widen by filling in the missing header
-        # cell(s) rather than erroring: every already-written row keeps
-        # its existing values in their existing positions untouched, and
-        # rows written from here on populate the new column(s) too. This
-        # is the safe, additive migration path any future new column
-        # should get, not just the one that prompted writing this.
-        missing_columns = required_header[len(existing_header):]
-        # Length captured ONCE, before the loop — if row_values() ever
-        # returns a live reference rather than a fresh copy (harmless for
-        # a real gspread client, which always returns fresh data, but not
-        # a safe assumption to bake in), re-reading len(existing_header)
-        # inside the loop after update_cell has already run once could
-        # silently drift and write columns at the wrong index.
-        original_length = len(existing_header)
+        return ws
+
+    # Every column this tab needs, checked by NAME — not position. Every
+    # read/write anywhere in this system goes by column name (a
+    # row_values(1) index lookup, or get_all_records()'s dict keys),
+    # never a fixed positional offset — so a required column simply
+    # needing to EXIST somewhere in the header is the real requirement.
+    # An earlier version of this check required the required columns to
+    # appear as an exact ordered PREFIX, which is stricter than
+    # necessary and was actively wrong once any custom column (from a
+    # CSV import, via ensure_master_header_includes) had already been
+    # appended after an earlier required column: a LATER code update
+    # adding still another new required column would then find that
+    # custom column sitting exactly where the new one was expected, and
+    # fail the whole tab outright — exactly the bug a real user hit in
+    # production, the first time a genuinely new required column and an
+    # already-imported custom column collided in position.
+    missing_columns = [c for c in required_header if c not in existing_header]
+    if missing_columns:
+        if len(missing_columns) == len(required_header):
+            # Every required column is missing — this isn't "a few new
+            # columns were added since this tab was created", it shares
+            # NOTHING with what this tab is supposed to look like. Fail
+            # loudly rather than silently bolting the entire expected
+            # schema onto what's probably an unrelated sheet/tab.
+            raise RuntimeError(
+                f"Header row in tab '{title}' shares none of the expected columns.\n"
+                f"Expected: {required_header}\n"
+                f"Found: {existing_header}\n"
+                "This doesn't look like the right tab for this campaign — check its config."
+            )
+        start_col = len(existing_header) + 1
         for i, col_name in enumerate(missing_columns):
-            ws.update_cell(1, original_length + 1 + i, col_name)
-    elif existing_header[:len(required_header)] != required_header:
-        raise RuntimeError(
-            f"Header row in tab '{title}' does not start with the expected columns.\n"
-            f"Expected (in this order, as a prefix): {required_header}\n"
-            f"Found: {existing_header}\n"
-            "Fix the header manually, or delete the tab so it gets recreated "
-            "automatically on the next run. Extra columns AFTER the required "
-            "ones are fine and preserved."
-        )
+            ws.update_cell(1, start_col + i, col_name)
+
     return ws
 
 
@@ -3184,13 +3207,36 @@ def _safe_lead_str(value) -> str:
     return str(value).strip()
 
 
+_ASANA_STAGE_NAMES_BY_LOWER = {
+    name.lower(): name for name in
+    (ASANA_STAGE_SOURCED, ASANA_STAGE_OUTREACH_SENT, ASANA_STAGE_FOLLOWUP,
+     ASANA_STAGE_NEGOTIATING, ASANA_STAGE_RIGHTS_SECURED, ASANA_STAGE_DECLINED_DEAD)
+}
+
+
 def compute_lead_asana_stage(lead: Dict) -> str:
     """Derives where a lead sits in the Asana creator-outreach pipeline
     from data the email system already tracks — never guesses Rights
-    Secured or Declined / Dead, since those are real human decisions,
-    not something inferable from send/reply timestamps. Checked most-
-    advanced-state-first, so a lead with both a follow-up sent AND a
-    reply logged correctly lands on Negotiating, not Follow-up."""
+    Secured or Declined / Dead on its own, since those are real human
+    decisions, not something inferable from send/reply timestamps.
+    Checked most-advanced-state-first, so a lead with both a follow-up
+    sent AND a reply logged correctly lands on Negotiating, not
+    Follow-up.
+
+    A "ManualAsanaStage" value on the lead (any of the six real stage
+    names, case-insensitive — e.g. set from the Data tab for a lead
+    handled outside the automated pipeline entirely) takes priority
+    over every rule below it. This is the one legitimate way to reach
+    Rights Secured or Declined / Dead from the Sheet side — including
+    for a task that doesn't exist in Asana yet, so a lead you've
+    already finalized manually can be created directly into the right
+    stage on its very first sync. An unrecognized value is ignored
+    (falls through to normal auto-derivation) rather than raising."""
+    manual_override = _safe_lead_str(lead.get("ManualAsanaStage"))
+    if manual_override:
+        matched_stage = _ASANA_STAGE_NAMES_BY_LOWER.get(manual_override.lower())
+        if matched_stage:
+            return matched_stage
     if (lead.get("ReplyStatus") or "").strip() == "Replied":
         return ASANA_STAGE_NEGOTIATING
     for index in range(1, 5):
