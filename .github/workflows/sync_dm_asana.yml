@@ -31,12 +31,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      # sync_dm_asana.py imports outreach.py directly (see its own
-      # module docstring) to reuse the exact same, already-tested Asana
-      # functions rather than a second copy of them — that import needs
-      # requests, which discovery's own requirements.txt has no reason
-      # to otherwise list.
-      - run: pip install requests>=2.31
       - name: Write service account file
         run: echo "$GCP_SA_KEY" > service_account.json
         env:
