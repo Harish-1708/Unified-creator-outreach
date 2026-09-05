@@ -57,10 +57,10 @@ def build_default_mapping(csv_columns: List[str], custom_columns: List[str],
         matched = known_by_norm.get(key) or custom_by_norm.get(key)
         if matched:
             mapping[col] = matched
-        elif col.lower() in reserved_lower:
+        elif col.strip().lower() in reserved_lower:
             mapping[col] = ""
         else:
-            mapping[col] = col  # zero-click default: new custom field named after itself
+            mapping[col] = col.strip()  # zero-click default: new custom field named after itself
     return mapping
 
 
@@ -144,8 +144,16 @@ def count_valid_rows(mapped_rows: List[Dict[str, str]]) -> int:
     return sum(1 for r in mapped_rows if (r.get("Email") or "").strip())
 
 
-def build_import_payload(mapped_rows: List[Dict[str, str]]) -> Dict:
-    return {"leads": mapped_rows}
+def build_import_payload(mapped_rows: List[Dict[str, str]], allow_duplicate_emails: bool = False) -> Dict:
+    """allow_duplicate_emails: when True, a row whose email already
+    exists as a lead in this campaign is still imported as its own new
+    row, rather than skipped — for a real, recurring case: contacting
+    the same creator again for a genuinely different video, tracked as
+    its own Asana task. Sending itself stays completely unaffected —
+    outreach.py's own eligibility logic only ever considers the FIRST
+    row for a given email eligible to actually be emailed, regardless
+    of this flag."""
+    return {"leads": mapped_rows, "allow_duplicate_emails": allow_duplicate_emails}
 
 
 def import_payload_path(campaign_name: str, timestamp: Optional[str] = None) -> str:
