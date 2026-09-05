@@ -1,0 +1,54 @@
+name: Sync DM to Asana
+
+# Deliberately no independent schedule of its own — dispatched either on
+# its own, or alongside "Sync Asana" (the email-side workflow) from the
+# SAME "Sync to Asana Now" button, so one click covers both channels
+# going into the same Asana project. See sync_dm_asana.py's own module
+# docstring for why this isn't a separate, parallel Asana integration.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Discovery campaign name — must match exactly (case-sensitive)"
+        required: true
+      asana_project_name:
+        description: "Leave blank to use the campaign name itself as the Asana project name"
+        required: false
+
+concurrency:
+  group: sync-dm-asana-${{ github.event.inputs.campaign }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      # sync_dm_asana.py imports outreach.py directly (see its own
+      # module docstring) to reuse the exact same, already-tested Asana
+      # functions rather than a second copy of them — that import needs
+      # requests, which discovery's own requirements.txt has no reason
+      # to otherwise list.
+      - run: pip install requests>=2.31
+      - name: Write service account file
+        run: echo "$GCP_SA_KEY" > service_account.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      - name: Sync DM creators to Asana
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ./service_account.json
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ASANA_ACCESS_TOKEN: ${{ secrets.ASANA_ACCESS_TOKEN }}
+          CAMPAIGN: ${{ github.event.inputs.campaign }}
+          ASANA_PROJECT_NAME: ${{ github.event.inputs.asana_project_name }}
+        run: python sync_dm_asana.py
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
