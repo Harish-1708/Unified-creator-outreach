@@ -3201,8 +3201,37 @@ def compute_lead_asana_stage(lead: Dict) -> str:
     return ASANA_STAGE_SOURCED
 
 
+# DM_STATUS -> the SAME Asana stage vocabulary as email leads — one
+# project, one set of stages, nothing DM-specific. "Not Interested" maps
+# to Negotiating rather than Declined/Dead, deliberately: a reply
+# happened, so the conversation genuinely reached a negotiating point,
+# and Declined/Dead stays a human decision made directly in Asana, same
+# rule as the email side — never auto-assigned here.
+DM_STATUS_TO_ASANA_STAGE = {
+    "Not Contacted": ASANA_STAGE_SOURCED,
+    "Draft Ready": ASANA_STAGE_SOURCED,
+    "Sent": ASANA_STAGE_OUTREACH_SENT,
+    "Follow-up Needed": ASANA_STAGE_FOLLOWUP,
+    "No Response": ASANA_STAGE_FOLLOWUP,
+    "Replied": ASANA_STAGE_NEGOTIATING,
+    "Interested": ASANA_STAGE_NEGOTIATING,
+    "Not Interested": ASANA_STAGE_NEGOTIATING,
+    "Closed": ASANA_STAGE_NEGOTIATING,
+}
+
+
+def compute_dm_asana_stage(dm_status: str) -> str:
+    """DM equivalent of compute_lead_asana_stage — same reasoning, same
+    target stage vocabulary, just derived from a DM status string
+    instead of email send/reply timestamps. A blank or unrecognized
+    status is treated as Sourced (nothing has actually happened yet),
+    never guessed at more aggressively than that."""
+    return DM_STATUS_TO_ASANA_STAGE.get((dm_status or "").strip(), ASANA_STAGE_SOURCED)
+
+
 def decide_asana_sync_action(lead: Dict, current_asana_section_name: Optional[str],
-                              existing_task_gid: Optional[str] = None) -> Dict:
+                              existing_task_gid: Optional[str] = None,
+                              computed_stage: Optional[str] = None) -> Dict:
     """Pure decision logic — no network calls here, which is exactly why
     this is tested exhaustively on its own. Returns
     {"action": "create" | "update", "target_stage": str or None}.
@@ -3220,6 +3249,15 @@ def decide_asana_sync_action(lead: Dict, current_asana_section_name: Optional[st
     Defaults to reading straight from the lead's own AsanaTaskGID field
     when not given, for every normal call site.
 
+    computed_stage: pass this explicitly for a lead type that isn't
+    email send/reply history — e.g. a DM-routed Shortlist row, whose
+    stage comes from compute_dm_asana_stage(dm_status) instead. Defaults
+    to compute_lead_asana_stage(lead) when not given, unchanged for
+    every existing email call site. Deliberately a plain override
+    rather than two separate decision functions, so the human-only-
+    stage protection below lives in exactly one place, applied
+    identically regardless of which kind of lead it's protecting.
+
     target_stage is None when the task's current section is a manual-
     only stage (Rights Secured / Declined / Dead) — the caller must
     still update the task's other fields, but must never move it out of
@@ -3227,7 +3265,7 @@ def decide_asana_sync_action(lead: Dict, current_asana_section_name: Optional[st
     if existing_task_gid is None:
         existing_task_gid = _safe_lead_str(lead.get("AsanaTaskGID"))
     has_existing_task = bool(existing_task_gid)
-    computed_stage = compute_lead_asana_stage(lead)
+    computed_stage = computed_stage if computed_stage is not None else compute_lead_asana_stage(lead)
     if not has_existing_task:
         return {"action": "create", "target_stage": computed_stage}
     if current_asana_section_name in ASANA_MANUAL_ONLY_STAGES:
