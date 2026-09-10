@@ -690,6 +690,20 @@ def _get_or_create_ws(spreadsheet, gspread_module, title: str, required_header: 
                 "This doesn't look like the right tab for this campaign — check its config."
             )
         start_col = len(existing_header) + 1
+        needed_col_count = len(existing_header) + len(missing_columns)
+        if ws.col_count < needed_col_count:
+            # The exact live crash this prevents: 'APIError: [400]: Range
+            # exceeds grid limits' — a Sheet tab's grid width is fixed at
+            # however many columns it had when first created (or last
+            # resized). This system's own required-column list has grown
+            # more than once (AsanaTaskGID, ManualAsanaStage, ...), and
+            # any tab created before the most recent growth has no room
+            # left to write the new header cell(s) into — writing one
+            # anyway raises this error every time, not intermittently,
+            # and retrying the identical write (as _RetryingWorksheet
+            # does for every other call) can never succeed on its own,
+            # since nothing about the retry grows the grid.
+            ws.resize(cols=needed_col_count + 10)
         for i, col_name in enumerate(missing_columns):
             ws.update_cell(1, start_col + i, col_name)
 
