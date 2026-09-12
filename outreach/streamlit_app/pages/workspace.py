@@ -1279,6 +1279,54 @@ with tabs[3]:
                 else:
                     st.info(reason_s)
 
+        st.divider()
+        with st.expander("🔧 Manage a lead"):
+            st.caption(
+                "Stop sending to just this one lead without removing it (it stays visible, only "
+                "excluded from future sends), or push its Asana pipeline stage straight to Rights "
+                "Secured / Declined for a lead handled outside the automated pipeline entirely — "
+                "e.g. one you finalized manually. Both apply on the next sync, manual or scheduled."
+            )
+            lead_options = {f"{lead.get('LeadID', '')} — {lead.get('FirstName', '')} "
+                             f"{lead.get('LastName', '')} <{lead.get('Email', '')}>": lead.get("Email", "")
+                             for lead in leads_for_campaign}
+            selected_lead_label = st.selectbox("Lead", ["-- Select --"] + list(lead_options.keys()),
+                                                key="ws_manage_lead_select")
+
+            if selected_lead_label != "-- Select --":
+                selected_email = lead_options[selected_lead_label]
+                current_lead = next((lead for lead in leads_for_campaign
+                                      if lead.get("Email") == selected_email), {})
+                st.caption(f"Current status: **{current_lead.get('Status') or '(none)'}** · "
+                           f"Current Asana stage override: "
+                           f"**{current_lead.get('ManualAsanaStage') or '(none — automatic)'}**")
+
+                status_choice = st.selectbox(
+                    "Sending status", ["(no change)", "Stop sending to this lead",
+                                        "Clear override (resume normal sending)"],
+                    key="ws_manage_lead_status")
+                asana_stage_choice = st.selectbox(
+                    "Asana stage override", ["(no change)", "Clear override (resume automatic tracking)",
+                                              outreach.ASANA_STAGE_SOURCED, outreach.ASANA_STAGE_OUTREACH_SENT,
+                                              outreach.ASANA_STAGE_FOLLOWUP, outreach.ASANA_STAGE_NEGOTIATING,
+                                              outreach.ASANA_STAGE_RIGHTS_SECURED,
+                                              outreach.ASANA_STAGE_DECLINED_DEAD],
+                    key="ws_manage_lead_asana_stage")
+
+                if st.button("Save", key="ws_manage_lead_save"):
+                    if status_choice == "(no change)" and asana_stage_choice == "(no change)":
+                        st.warning("Nothing selected to change.")
+                    else:
+                        try:
+                            client = _get_github_client()
+                            inputs = {"campaign": outreach_campaign, "email": selected_email,
+                                      "status": status_choice, "asana_stage": asana_stage_choice}
+                            client.dispatch_workflow(config.WORKFLOW_SET_LEAD_OVERRIDE, inputs)
+                            st.success(f"Update triggered for {selected_email}. May take a minute to "
+                                       f"actually reflect here while the app redeploys.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Failed to trigger update: {exc}")
+
 
 # =============================================================================
 # TAB 4 — Schedule
@@ -1499,7 +1547,19 @@ with tabs[5]:
             raw_for_asana = load_raw_override(cname, config.CAMPAIGNS_DIR)
         except Exception:  # noqa: BLE001
             raw_for_asana = {}
-        asana_settings = raw_for_asana.get("asana") or {}
+        # `or {}` alone isn't enough here — it catches None and an empty
+        # dict, but NOT a wrong type. A hand-edited campaign YAML with
+        # `asana: enabled` (a bare string) instead of a proper nested
+        # block would otherwise crash this entire tab with an
+        # AttributeError on .get, taking Sending limits, Send, Sync
+        # Shortlist and the Danger Zone down with it.
+        asana_settings = raw_for_asana.get("asana")
+        if not isinstance(asana_settings, dict):
+            if asana_settings:
+                st.warning("This campaign's `asana:` config isn't in the expected format — treating "
+                           "Asana sync as off. Fix it in the campaign's YAML, or just re-save the "
+                           "settings below to overwrite it.")
+            asana_settings = {}
         with st.expander("🔗 Asana Sync", expanded=bool(asana_settings.get("enabled"))):
             st.caption(
                 "Creates or updates one Asana task per lead — never a duplicate, since each lead's "
