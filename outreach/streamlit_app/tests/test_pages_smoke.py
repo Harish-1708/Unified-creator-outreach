@@ -95,6 +95,13 @@ def test_dashboard_page_renders_without_exceptions():
         for k, v in _authed_session().items():
             at.session_state[k] = v
         at.run()
+        # Harish_Testing_25AUG is a real second sample campaign in this
+        # repo and sorts before Kelson_Creators_Licensing alphabetically,
+        # so it's the selectbox's default — explicitly pick the campaign
+        # this test's fake Sheet data is actually for.
+        campaign_selector = next(s for s in at.selectbox if s.label == "Campaign")
+        campaign_selector.select("Kelson_Creators_Licensing")
+        at.run()
 
     assert list(at.exception) == [], f"Dashboard page raised: {list(at.exception)}"
     assert list(at.error) == [], f"Dashboard page showed an error: {[e.value for e in at.error]}"
@@ -176,7 +183,7 @@ def test_new_campaign_dialog_creates_campaign_and_stays_on_hub():
     assert list(at.exception) == [], f"Create campaign raised: {list(at.exception)}"
     assert list(at.error) == []
     assert len(captured["commits"]) == 1
-    assert captured["commits"][0]["path"] == "templates/BrandNewCampaign/intro_A.txt"
+    assert captured["commits"][0]["path"] == "outreach/templates/BrandNewCampaign/intro_A.txt"
     # No template content was ever asked for — a placeholder is used instead.
     assert b"Write your subject here" in captured["commits"][0]["content"]
     assert captured["dispatched"] == "dashboard.yml"  # auto tab-init was triggered
@@ -383,11 +390,14 @@ def test_email_accounts_page_renders_without_exceptions():
 def test_email_accounts_page_shows_info_when_no_accounts_configured_at_all():
     """No longer a warning — now that Add Account exists, having zero
     accounts is just a starting state, not something wrong."""
-    at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
-    at.secrets.update(_dashboard_secrets())  # no email_accounts_directory key, no slot mapping file
-    for k, v in _authed_session().items():
-        at.session_state[k] = v
-    at.run()
+    fake_spreadsheet = FakeSpreadsheet({"Kelson_Creators_Licensing Custom Log Sheet": FakeWorksheet([])})
+    with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
+        at.secrets.update(_dashboard_secrets())  # no email_accounts_directory key, no slot mapping file
+        for k, v in _authed_session().items():
+            at.session_state[k] = v
+        at.run()
 
     assert list(at.exception) == []
     info_texts = " ".join(i.value for i in at.info)
@@ -1217,10 +1227,10 @@ def test_data_tab_import_commits_payload_and_triggers_workflow():
     assert list(at.error) == []
     assert captured["workflow"] == "import_leads.yml"
     assert captured["inputs"]["campaign"] == "Kelson_Creators_Licensing"
-    assert captured["path"].startswith("imports/Kelson_Creators_Licensing/")
+    assert captured["path"].startswith("outreach/imports/Kelson_Creators_Licensing/")
     import json
     payload = json.loads(captured["content"].decode("utf-8"))
-    assert payload == {"leads": [{"FirstName": "Sam", "Email": "sam@abc.com"}]}
+    assert payload == {"leads": [{"FirstName": "Sam", "Email": "sam@abc.com"}], "allow_duplicate_emails": False}
 
 
 def test_data_tab_shows_error_when_no_column_mapped_to_email():
@@ -1418,7 +1428,7 @@ def test_sequences_tab_unlock_and_save_edits_one_variant():
     assert list(at.error) == []
     assert len(captured["commits"]) == 1
     commit = captured["commits"][0]
-    assert commit["path"] == "templates/Kelson_Creators_Licensing/intro_A.txt"
+    assert commit["path"] == "outreach/templates/Kelson_Creators_Licensing/intro_A.txt"
     assert b"A brand new intro subject" in commit["content"]
 
 
@@ -1632,7 +1642,7 @@ def test_settings_tab_save_writes_yaml_with_new_values_and_correct_path():
     assert list(at.error) == []
     assert len(captured["commits"]) == 1
     commit = captured["commits"][0]
-    assert commit["path"] == "config/campaigns/Kelson_Creators_Licensing.yaml"
+    assert commit["path"] == "outreach/config/campaigns/Kelson_Creators_Licensing.yaml"
     import yaml
     written = yaml.safe_load(commit["content"].decode("utf-8"))
     assert written["sending"]["daily_limit"] == 250
@@ -1847,7 +1857,13 @@ def test_delete_campaign_deletes_every_template_file(tmp_path):
 
     assert list(at.exception) == []
     assert len(deleted_paths) >= 1
-    assert all(p.startswith("templates/Kelson_Creators_Licensing/") for p in deleted_paths)
+    template_paths = [p for p in deleted_paths if "/templates/" in p]
+    assert len(template_paths) >= 1
+    assert all(p.startswith("outreach/templates/Kelson_Creators_Licensing/") for p in template_paths)
+    # The campaign's config override is correctly deleted too, as part of
+    # a full campaign deletion — not itself a template file, so excluded
+    # from the check above.
+    assert "outreach/config/campaigns/Kelson_Creators_Licensing.yaml" in deleted_paths
 
 
 def test_temporarily_remove_campaign_sets_deleted_status_without_deleting_files():
@@ -2654,7 +2670,7 @@ def test_responses_tab_send_reply_commits_correct_payload_and_triggers_workflow(
     assert captured["workflow"] == "send_reply.yml"
     assert captured["inputs"]["campaign"] == "Kelson_Creators_Licensing"
     commit = captured["commits"][0]
-    assert commit["path"].startswith("replies/Kelson_Creators_Licensing/")
+    assert commit["path"].startswith("outreach/replies/Kelson_Creators_Licensing/")
 
     import json
     payload = json.loads(commit["content"].decode("utf-8"))
@@ -3241,7 +3257,8 @@ def test_responses_hub_check_replies_button_triggers_every_campaign():
 
     assert list(at.exception) == []
     assert list(at.error) == []
-    assert dispatched == [("check_replies.yml", "Kelson_Creators_Licensing")]
+    assert set(dispatched) == {("check_replies.yml", "Harish_Testing_25AUG"),
+                                ("check_replies.yml", "Kelson_Creators_Licensing")}
 
 
 def test_responses_hub_reply_uses_correct_campaign_for_that_response():
