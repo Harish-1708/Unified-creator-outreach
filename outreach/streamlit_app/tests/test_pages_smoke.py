@@ -18,6 +18,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import preview_logic
+
 PAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "pages")
 
 
@@ -389,10 +391,17 @@ def test_email_accounts_page_renders_without_exceptions():
 
 def test_email_accounts_page_shows_info_when_no_accounts_configured_at_all():
     """No longer a warning — now that Add Account exists, having zero
-    accounts is just a starting state, not something wrong."""
+    accounts is just a starting state, not something wrong.
+
+    The empty slot mapping is patched in rather than relying on the
+    repo's committed config/email_account_slots.yaml being empty: this
+    repo has a real account configured, and a test asserting "shows the
+    zero-accounts state" must set up that state itself, not depend on
+    live production config staying empty."""
     fake_spreadsheet = FakeSpreadsheet({"Kelson_Creators_Licensing Custom Log Sheet": FakeWorksheet([])})
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
-         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         patch("email_account_slots_logic.read_local_slot_mapping", return_value={}):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "email_accounts.py"))
         at.secrets.update(_dashboard_secrets())  # no email_accounts_directory key, no slot mapping file
         for k, v in _authed_session().items():
@@ -967,6 +976,26 @@ def test_manage_section_remove_deletes_secret_and_updates_mapping(tmp_path):
     mapping_commit = commits_captured["commits"][0]
     written_mapping = _yaml.safe_load(mapping_commit["content"].decode("utf-8"))
     assert "sales1" not in written_mapping
+
+
+def _forced_status_cfg(status):
+    """Returns a patch that forces every campaign's resolved status,
+    regardless of what's actually committed in this repo's
+    config/campaigns/*.yaml.
+
+    Without this, a test asserting "shows the Pause button" is really
+    asserting "whoever last used this repo left the campaign Running" —
+    it passes or fails based on live production state, not on the
+    behavior under test. That's exactly what broke these tests: the real
+    Kelson_Creators_Licensing is legitimately `paused`."""
+    real_get_cfg = preview_logic.get_campaign_cfg
+
+    def fake_get_cfg(campaign_name, *args, **kwargs):
+        cfg = dict(real_get_cfg(campaign_name, *args, **kwargs))
+        cfg["status"] = status
+        return cfg
+
+    return patch("preview_logic.get_campaign_cfg", fake_get_cfg)
 
 
 def _campaigns_page_fake_ws():
@@ -1600,7 +1629,8 @@ def test_settings_tab_shows_info_when_no_accounts_directory_configured():
     fake_spreadsheet = FakeSpreadsheet(_campaigns_page_fake_ws())
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
-         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         patch("email_account_slots_logic.read_local_slot_mapping", return_value={}):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())  # no email_accounts_directory
         for k, v in _authed_session().items():
@@ -1876,6 +1906,7 @@ def test_temporarily_remove_campaign_sets_deleted_status_without_deleting_files(
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"), \
          patch("github_client.GitHubClient.create_file", fake_create_file), \
          patch("github_client.GitHubClient.delete_file", fake_delete_file):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
@@ -2151,7 +2182,8 @@ def test_status_controls_running_campaign_shows_pause_button():
     fake_spreadsheet = FakeSpreadsheet(_campaigns_page_fake_ws())
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
-         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
         for k, v in _authed_session().items():
@@ -2173,6 +2205,7 @@ def test_status_controls_pause_button_commits_paused_status():
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"), \
          patch("github_client.GitHubClient.create_file", fake_create_file):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
@@ -2357,6 +2390,7 @@ def test_send_tab_send_batch_requires_typed_send_confirmation():
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"), \
          patch("github_client.GitHubClient.dispatch_workflow", fake_dispatch):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
@@ -2387,6 +2421,7 @@ def test_send_tab_send_batch_dispatches_with_correct_inputs_when_confirmed():
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
          patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"), \
          patch("github_client.GitHubClient.dispatch_workflow", fake_dispatch):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
@@ -2505,7 +2540,8 @@ def test_send_section_visible_when_campaign_is_running():
     fake_spreadsheet = FakeSpreadsheet(_campaigns_page_fake_ws())
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
-         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
         for k, v in _authed_session().items():
@@ -2524,7 +2560,8 @@ def test_send_section_no_longer_shows_duplicate_limit_overrides():
     fake_spreadsheet = FakeSpreadsheet(_campaigns_page_fake_ws())
 
     with patch("gspread.authorize", return_value=type("C", (), {"open_by_key": lambda self, k: fake_spreadsheet})()), \
-         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()):
+         patch("google.oauth2.service_account.Credentials.from_service_account_info", return_value=object()), \
+         _forced_status_cfg("active"):
         at = AppTest.from_file(os.path.join(PAGES_DIR, "campaigns.py"))
         at.secrets.update(_dashboard_secrets())
         for k, v in _authed_session().items():
@@ -3257,8 +3294,13 @@ def test_responses_hub_check_replies_button_triggers_every_campaign():
 
     assert list(at.exception) == []
     assert list(at.error) == []
-    assert set(dispatched) == {("check_replies.yml", "Harish_Testing_25AUG"),
-                                ("check_replies.yml", "Kelson_Creators_Licensing")}
+    # Asserts the real behavior — EVERY discovered campaign gets a
+    # dispatch — rather than hardcoding a campaign list, which breaks
+    # the moment a campaign is added or removed from the repo (and did:
+    # this repo now has three, not the two originally listed here).
+    expected = {("check_replies.yml", name) for name in preview_logic.list_campaigns()}
+    assert set(dispatched) == expected
+    assert len(expected) >= 1  # guards against the list silently being empty
 
 
 def test_responses_hub_reply_uses_correct_campaign_for_that_response():
