@@ -1022,7 +1022,7 @@ def render_email(templates_dir: str, template_prefix: str, variant: str, lead: D
                 "in the sequence — there's no previous thread to continue. Every first-stage template "
                 "needs a non-blank Subject."
             )
-        existing_thread_subject = (lead.get("ThreadSubject") or "").strip()
+        existing_thread_subject = _safe_lead_str(lead.get("ThreadSubject"))
         if not existing_thread_subject:
             raise TemplateError(
                 f"{template_prefix}_{variant}.txt has a blank Subject line (continue-the-thread), but "
@@ -1098,7 +1098,7 @@ def find_duplicate_email_leads(leads: List[Dict]) -> Dict[str, List[Dict]]:
     gets noticed and cleaned up rather than silently persisting."""
     by_email: Dict[str, List[Dict]] = {}
     for lead in leads:
-        email = (lead.get("Email") or "").strip().lower()
+        email = _safe_lead_str(lead.get("Email")).lower()
         if not email:
             continue
         by_email.setdefault(email, []).append(lead)
@@ -1184,6 +1184,13 @@ def is_within_sending_window(schedule: Dict, now_utc: Optional[datetime] = None)
 
 def get_eligible_leads(leads: List[Dict], stages: List[Dict], stage_index: int,
                         ignore_wait_days: bool = False) -> List[Dict]:
+    if stage_index >= len(stages) and stages:
+        # A stage index past the end of this campaign's configured stages
+        # — e.g. a workflow dispatched with a stale stage name, or a stage
+        # deleted between dispatch and run. Nothing is eligible rather
+        # than an IndexError that takes down the whole send run.
+        return []
+
     this_sent_field = stage_field_names(stage_index)["sent_at"]
 
     prev_sent_field = None
@@ -1196,7 +1203,15 @@ def get_eligible_leads(leads: List[Dict], stages: List[Dict], stage_index: int,
     now = datetime.now()
 
     for lead in leads:
-        if not (lead.get("Email") or "").strip():
+        # _safe_lead_str, not a bare .strip() — gspread types a cell by
+        # what its content LOOKS like, independent of the column it's in,
+        # so a numeric-looking email (or a Sheet where someone typed a
+        # phone number into the Email column) comes back as an int, and
+        # `(int or "").strip()` raises AttributeError. This is the exact
+        # bug class that already caused one real production incident with
+        # AsanaTaskGID; there is no reason for the send path — the
+        # highest-stakes code here — to be more fragile than that.
+        if not _safe_lead_str(lead.get("Email")):
             continue  # Email is mandatory
         if lead.get("Status", "") in TERMINAL_STATUSES:
             continue
@@ -1238,7 +1253,7 @@ def get_eligible_leads(leads: List[Dict], stages: List[Dict], stage_index: int,
     deduped = []
     seen_emails = set()
     for lead in eligible:
-        email = (lead.get("Email") or "").strip().lower()
+        email = _safe_lead_str(lead.get("Email")).lower()
         if email in seen_emails:
             continue
         seen_emails.add(email)
@@ -1353,7 +1368,7 @@ def resolve_sender_account(lead: Dict, campaign_cfg: Dict, accounts: Dict[str, D
     campaign default > global default. Still used directly whenever
     sender_rotation is off. Kept unchanged so nothing that depended on it
     before breaks."""
-    requested = (lead.get("SenderAccount") or "").strip()
+    requested = _safe_lead_str(lead.get("SenderAccount"))
     if requested:
         if requested not in accounts:
             raise MissingSenderAccountError(f"Unknown SenderAccount '{requested}' — not in EMAIL_ACCOUNTS_JSON.")
@@ -1434,7 +1449,7 @@ def resolve_sender_account_for_send(lead: Dict, campaign_cfg: Dict, accounts: Di
     sending_cfg = campaign_cfg.get("sending", {})
     per_account_limit = sending_cfg.get("per_account_daily_limit")
 
-    requested = (lead.get("SenderAccount") or "").strip()
+    requested = _safe_lead_str(lead.get("SenderAccount"))
     if requested:
         if requested not in accounts:
             raise MissingSenderAccountError(f"Unknown SenderAccount '{requested}' — not in EMAIL_ACCOUNTS_JSON.")
@@ -1855,7 +1870,7 @@ def backfill_thread_subjects(campaign_cfg: Dict, leads: List[Dict]) -> List[Dict
     results = []
     for lead in leads:
         lead_id = lead.get("LeadID", "")
-        if (lead.get("ThreadSubject") or "").strip():
+        if _safe_lead_str(lead.get("ThreadSubject")):
             results.append({"lead_id": lead_id, "status": "skipped_already_set"})
             continue
 
@@ -1951,7 +1966,7 @@ def import_leads(sheets: SheetsConnector, campaign_name: str, new_leads: List[Di
     skipped_duplicate = 0
     skipped_no_email = 0
     for lead in new_leads:
-        email = (lead.get("Email") or "").strip()
+        email = _safe_lead_str(lead.get("Email"))
         if not email:
             skipped_no_email += 1
             continue
@@ -2059,7 +2074,7 @@ def _resolve_account_for_round(lead: Dict, campaign_cfg: Dict, accounts: Dict[st
     happens to be using that account in the same round.
     """
     per_account_limit = campaign_cfg.get("sending", {}).get("per_account_daily_limit")
-    requested = (lead.get("SenderAccount") or "").strip()
+    requested = _safe_lead_str(lead.get("SenderAccount"))
 
     if requested:
         if requested not in accounts:
@@ -2526,10 +2541,10 @@ def check_replies(sheets: SheetsConnector, accounts: Dict[str, Dict[str, str]], 
     by_message_id = {}
     by_email = {}
     for lead in leads:
-        mid = (lead.get("MessageID") or "").strip()
+        mid = _safe_lead_str(lead.get("MessageID"))
         if mid:
             by_message_id.setdefault(mid, lead)
-        email_addr = (lead.get("Email") or "").strip().lower()
+        email_addr = _safe_lead_str(lead.get("Email")).lower()
         if email_addr:
             by_email.setdefault(email_addr, lead)
 
@@ -3333,12 +3348,12 @@ def compute_lead_asana_stage(lead: Dict) -> str:
         matched_stage = _ASANA_STAGE_NAMES_BY_LOWER.get(manual_override.lower())
         if matched_stage:
             return matched_stage
-    if (lead.get("ReplyStatus") or "").strip() == "Replied":
+    if _safe_lead_str(lead.get("ReplyStatus")) == "Replied":
         return ASANA_STAGE_NEGOTIATING
     for index in range(1, 5):
         if (lead.get(f"FollowUp{index}SentAt") or "").strip():
             return ASANA_STAGE_FOLLOWUP
-    if (lead.get("IntroSentAt") or "").strip():
+    if _safe_lead_str(lead.get("IntroSentAt")):
         return ASANA_STAGE_OUTREACH_SENT
     return ASANA_STAGE_SOURCED
 
@@ -3712,7 +3727,7 @@ def sync_campaign_to_asana(sheets: SheetsConnector, campaign_cfg: Dict, api_key:
     errors = []
 
     for lead in sheets.get_all_leads():
-        email = (lead.get("Email") or "").strip()
+        email = _safe_lead_str(lead.get("Email"))
         if not email:
             skipped_no_email += 1
             continue
