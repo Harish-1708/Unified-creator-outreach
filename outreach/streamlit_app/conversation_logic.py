@@ -22,9 +22,14 @@ import outreach  # noqa: E402
 def build_outgoing_messages_for_lead(campaign_cfg: Dict, lead: Dict) -> List[Dict]:
     """One entry per stage actually sent to this lead (has a non-blank
     SentAt), re-rendered from the exact template + variant locked in at
-    send time. A stage that fails to render for some reason (a template
-    since deleted, a data issue) is skipped rather than breaking the
-    whole conversation view over one bad stage."""
+    send time. A stage that fails to render (a template since deleted,
+    a lead missing ThreadSubject for a continuation template — the
+    real, documented case in render_email's own error message: sent
+    before that feature existed) still gets an entry, a clearly-marked
+    placeholder rather than being silently dropped — the actual content
+    is genuinely unrecoverable, but the person viewing this
+    conversation needs to know a stage IS missing here, not be left
+    assuming the thread they're looking at is the complete history."""
     templates_dir = os.path.join(config.TEMPLATES_ROOT, campaign_cfg["_campaign_name"])
     messages = []
     for index, stage_prefix in enumerate(outreach.CANONICAL_STAGE_ORDER):
@@ -38,12 +43,16 @@ def build_outgoing_messages_for_lead(campaign_cfg: Dict, lead: Dict) -> List[Dic
         try:
             rendered = outreach.render_email(templates_dir, stage_prefix, variant, lead,
                                               is_first_stage=(index == 0))
-        except Exception:  # noqa: BLE001 - one bad stage shouldn't sink the whole thread
-            continue
-        messages.append({
-            "direction": "outgoing", "timestamp": sent_at, "subject": rendered["subject"],
-            "body": rendered["body"],
-        })
+            messages.append({
+                "direction": "outgoing", "timestamp": sent_at, "subject": rendered["subject"],
+                "body": rendered["body"],
+            })
+        except Exception as exc:  # noqa: BLE001 - one bad stage shouldn't sink the whole thread
+            messages.append({
+                "direction": "outgoing", "timestamp": sent_at,
+                "subject": f"(content unavailable — {stage_prefix})",
+                "body": f"This message was sent, but its content can no longer be re-rendered: {exc}",
+            })
     return messages
 
 
