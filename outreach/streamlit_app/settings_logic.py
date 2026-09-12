@@ -20,12 +20,20 @@ def load_raw_override(campaign_name: str, campaigns_dir: str) -> Dict:
     """The override file's raw content, exactly as it is on disk — NOT
     merged with defaults (unlike campaign_cfg, which is always fully
     merged). Returns {} if the file doesn't exist yet — every campaign is
-    valid without one (auto-discovery covers that case)."""
+    valid without one (auto-discovery covers that case).
+
+    Also returns {} for a file whose top level isn't a mapping at all (a
+    bare string, a list, a number — a hand-edit gone wrong). Every caller
+    treats this as a dict and calls .get on it; returning the raw
+    non-dict instead would crash them with an AttributeError rather than
+    degrading to "no overrides set", which is both accurate and
+    recoverable — the user can just re-save from the Settings tab."""
     path = os.path.join(campaigns_dir, f"{campaign_name}.yaml")
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        loaded = yaml.safe_load(f)
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def validate_settings(daily_limit: int, per_account_daily_limit: Optional[int]) -> List[str]:
