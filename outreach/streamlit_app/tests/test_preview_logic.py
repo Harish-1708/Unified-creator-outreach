@@ -36,12 +36,16 @@ def test_run_preview_renders_real_templates_for_a_fake_lead():
     assert plan[0]["lead"]["Email"] == "jordan@example.com"
 
 
-def test_run_preview_excludes_leads_missing_approval():
+def test_run_preview_includes_leads_with_blank_approval():
+    """Approval is informational only and no longer gates anything —
+    a lead with a blank Approval must still appear in the preview,
+    exactly like one with Approval='Yes'. This replaces an older test
+    that asserted the opposite, from before that gate was removed."""
     leads = [{
         "_row": 2, "LeadID": "L1", "Email": "jordan@example.com", "Approval": "",
     }]
     plan = run_preview("Kelson_Creators_Licensing", "intro", 10, leads)
-    assert plan == []
+    assert len(plan) == 1
 
 
 def test_run_preview_respects_forced_variant():
@@ -58,7 +62,7 @@ def test_run_preview_ignore_wait_days_makes_not_yet_due_followup_visible():
     recent = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     leads = [{
         "_row": 2, "LeadID": "L1", "Email": "jordan@example.com", "Approval": "Yes",
-        "IntroSentAt": recent, "IntroVariant": "A",
+        "IntroSentAt": recent, "IntroVariant": "A", "ThreadSubject": "Re: Your video",
     }]
 
     plan_default = run_preview("Kelson_Creators_Licensing", "followup1", 10, leads)
