@@ -98,10 +98,23 @@ def test_unknown_view_raises_clearly():
         crl.filter_creator_rows([], "NotARealView")
 
 
-def test_load_current_settings_missing_file_returns_empty_dict():
+def test_load_current_settings_returns_a_dict_without_raising():
     """No campaign_settings.yaml committed yet is a legitimate, common
-    starting state — must not raise."""
-    assert crl.load_current_settings() == {}
+    starting state — must not raise. Asserts the actual guarantee (a
+    dict, never an exception) rather than emptiness: this repo has a
+    real committed settings file, so asserting == {} was really asserting
+    "this deployment has no campaigns configured", which is environment
+    state, not behavior worth locking down in a test."""
+    result = crl.load_current_settings()
+    assert isinstance(result, dict)
+
+
+def test_load_all_settings_missing_file_returns_empty_dict(tmp_path):
+    """The real "file doesn't exist" case, tested hermetically against a
+    path guaranteed to be empty instead of against whatever happens to
+    be committed in this repo."""
+    import campaign_settings as cs_module
+    assert cs_module.load_all_settings(str(tmp_path / "does_not_exist.yaml")) == {}
 
 
 # ---------- lifecycle stage ----------
