@@ -165,3 +165,31 @@ def test_build_asana_settings_override_never_mutates_input():
 def test_build_asana_settings_override_disabled():
     updated = build_asana_settings_override({}, enabled=False, project_name="")
     assert updated["asana"]["enabled"] is False
+
+
+# ---------- load_raw_override: malformed YAML top level ----------
+
+def test_load_raw_override_returns_empty_dict_for_bare_string_yaml(tmp_path):
+    """A hand-edited campaign YAML whose top level is a bare string (not
+    a mapping) must degrade to "no overrides set", not return a str that
+    every caller then crashes on with AttributeError: 'str' object has
+    no attribute 'get'."""
+    (tmp_path / "Foo.yaml").write_text("just a bare string\n")
+    assert load_raw_override("Foo", str(tmp_path)) == {}
+
+
+def test_load_raw_override_returns_empty_dict_for_list_yaml(tmp_path):
+    (tmp_path / "Foo.yaml").write_text("- item1\n- item2\n")
+    assert load_raw_override("Foo", str(tmp_path)) == {}
+
+
+def test_load_raw_override_returns_empty_dict_for_empty_file(tmp_path):
+    (tmp_path / "Foo.yaml").write_text("")
+    assert load_raw_override("Foo", str(tmp_path)) == {}
+
+
+def test_load_raw_override_still_reads_a_valid_mapping(tmp_path):
+    (tmp_path / "Foo.yaml").write_text("status: active\nasana:\n  enabled: true\n")
+    result = load_raw_override("Foo", str(tmp_path))
+    assert result["status"] == "active"
+    assert result["asana"] == {"enabled": True}
