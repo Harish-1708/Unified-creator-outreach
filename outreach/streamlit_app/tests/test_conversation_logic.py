@@ -31,7 +31,8 @@ def test_build_outgoing_messages_includes_sent_stage():
 
 def test_build_outgoing_messages_includes_multiple_sent_stages():
     lead = _lead(IntroSentAt="2026-08-01 09:00:00", IntroVariant="A",
-                 FollowUp1SentAt="2026-08-05 09:00:00", FollowUp1Variant="A")
+                 FollowUp1SentAt="2026-08-05 09:00:00", FollowUp1Variant="A",
+                 ThreadSubject="Meta Ad Licensing Collaboration  – DudeRobe")
     messages = build_outgoing_messages_for_lead(_CAMPAIGN_CFG, lead)
     assert len(messages) == 2
     assert messages[0]["timestamp"] == "2026-08-01 09:00:00"
@@ -63,12 +64,17 @@ def test_build_outgoing_messages_renders_actual_template_variables():
     assert "{{FirstName}}" not in messages[0]["body"]
 
 
-def test_build_outgoing_messages_skips_stage_that_fails_to_render():
-    """A nonexistent campaign (no template files at all) must not crash —
-    every stage simply fails to render and gets skipped."""
+def test_build_outgoing_messages_shows_placeholder_for_stage_that_fails_to_render():
+    """A stage that genuinely can't be re-rendered (here: a nonexistent
+    campaign, no template files at all) must still show up as a clearly
+    marked placeholder — not silently vanish, which would leave the
+    person viewing this conversation unaware the history they're
+    looking at is incomplete."""
     lead = _lead(IntroSentAt="2026-08-01 09:00:00", IntroVariant="A")
     fake_campaign_cfg = {"_campaign_name": "NonexistentCampaignXYZ"}
-    assert build_outgoing_messages_for_lead(fake_campaign_cfg, lead) == []
+    messages = build_outgoing_messages_for_lead(fake_campaign_cfg, lead)
+    assert len(messages) == 1
+    assert "unavailable" in messages[0]["subject"]
 
 
 # ---------- build_incoming_messages_for_responses ----------
@@ -128,7 +134,8 @@ def test_filter_responses_for_lead_empty_list():
 
 def test_build_conversation_thread_merges_outgoing_and_incoming_chronologically():
     lead = _lead(IntroSentAt="2026-08-01 09:00:00", IntroVariant="A",
-                 FollowUp1SentAt="2026-08-10 09:00:00", FollowUp1Variant="A")
+                 FollowUp1SentAt="2026-08-10 09:00:00", FollowUp1Variant="A",
+                 ThreadSubject="Meta Ad Licensing Collaboration  – DudeRobe")
     responses = [{"LeadID": "1", "ReceivedAt": "2026-08-05 10:00:00", "Subject": "Re: Hi",
                   "From": "sam@abc.com", "Snippet": "interested", "FullBody": "I'm interested, tell me more"}]
     thread = build_conversation_thread(_CAMPAIGN_CFG, lead, responses)
